@@ -432,6 +432,105 @@ def compute_buy_score(close_price, swing_high, swing_low, sma120, sma200, low_52
     }
 
 
+def _resistance_score(close_price, resistance_high):
+    """저항선 근접도(0~40점): 계산 가능한 저항선 중 가장 가까운 값에 얼마나 근접했는지.
+    이미 그 저항선을 넘었으면 만점, 20% 이상 아래에 있으면 0점, 사이는 선형 보간."""
+    if not close_price or not resistance_high:
+        return 0.0
+    gap_pct = (resistance_high - close_price) / close_price * 100
+    if gap_pct <= 0:
+        return 40.0
+    if gap_pct >= 20:
+        return 0.0
+    return 40.0 * (1 - gap_pct / 20)
+
+
+def _rally_score(close_price, swing_low):
+    """급등 과열도(0~25점): 직전 저점 대비 얼마나 올랐는지. 많이 오를수록 높은 점수(눌림목 깊이의 반대)."""
+    if not close_price or not swing_low:
+        return 0.0
+    rally_pct = (close_price - swing_low) / swing_low * 100
+    if rally_pct <= 0:
+        return 0.0
+    if rally_pct >= 30:
+        return 25.0
+    return 25.0 * (rally_pct / 30)
+
+
+def _peg_sell_score(peg):
+    """성장 대비 밸류에이션(0~20점): PEG가 높을수록(성장 대비 비쌀수록) 높은 점수. PEG 점수의 반대."""
+    if not peg or peg <= 0:
+        return 10.0
+    if peg >= 3:
+        return 20.0
+    if peg <= 1:
+        return 0.0
+    return 20.0 * ((peg - 1) / 2)
+
+
+def _trend_sell_score(ma_alignment, cross_signal):
+    """추세 구조(0~15점): 역배열/데드크로스면 가산, 정배열/골든크로스면 감산. 추세 점수의 반대."""
+    score = 7.5
+    if ma_alignment == "역배열(하락추세)":
+        score += 7.5
+    elif ma_alignment == "정배열(상승추세)":
+        score -= 7.5
+
+    if cross_signal:
+        if "데드크로스" in cross_signal and ("오늘" in cross_signal or "일전" in cross_signal):
+            score += 3
+        elif "골든크로스" in cross_signal:
+            score -= 3
+    return max(0.0, min(15.0, score))
+
+
+def compute_sell_score(close_price, swing_high, swing_low, sma120, sma200, high_52w, peg, ma_alignment, cross_signal):
+    """저항선 근접도 + 급등 과열도 + PEG 밸류에이션(비쌈) + 추세 구조를 합친 0~100점 매도 근접도 점수.
+    compute_buy_score와 완전히 대칭되는 계산이며 모든 종목에 동일하게 적용된다.
+    (기계적 계산일 뿐 투자 조언이 아니며 최종 판단은 본인 몫)"""
+    resistance_candidates = {
+        "직전 스윙고점": swing_high,
+        "120일선": sma120,
+        "200일선": sma200,
+        "52주 고가": high_52w,
+    }
+    resistance_candidates = {k: v for k, v in resistance_candidates.items() if v}
+
+    resistance_high_label = resistance_high = None
+    if resistance_candidates and close_price:
+        # 현재가 바로 위(또는 근처)에서 가장 가까운 저항선을 기준으로 삼는다.
+        above = {k: v for k, v in resistance_candidates.items() if v >= close_price}
+        if above:
+            resistance_high_label, resistance_high = min(above.items(), key=lambda kv: kv[1])
+        # 모든 저항선을 이미 넘었으면(above가 비었으면) 근접도는 0점 처리 — 상단 과열은 rally 점수가 대신 반영
+
+    s_resistance = _resistance_score(close_price, resistance_high)
+    s_rally = _rally_score(close_price, swing_low)
+    s_peg = _peg_sell_score(peg)
+    s_trend = _trend_sell_score(ma_alignment, cross_signal)
+    total = round(s_resistance + s_rally + s_peg + s_trend, 1)
+
+    if total >= 65:
+        label = "매도 근접(강한 신호)"
+    elif total >= 40:
+        label = "관망(경계)"
+    else:
+        label = "아직 매도권 아님"
+
+    detail = (
+        f"저항선{s_resistance:.0f}/40({resistance_high_label or '-'} {resistance_high or '-'}) · "
+        f"과열도{s_rally:.0f}/25 · PEG{s_peg:.0f}/20({peg if peg else '-'}) · 추세{s_trend:.0f}/15"
+    )
+
+    return {
+        "sell_score": total,
+        "sell_score_label": label,
+        "sell_score_detail": detail,
+        "nearest_resistance": round(resistance_high, 2) if resistance_high else None,
+        "nearest_resistance_label": resistance_high_label,
+    }
+
+
 def us_trading_date():
     # 스크립트는 미국장 마감 이후(뉴욕 시간 기준 당일 저녁)에 실행되므로
     # 뉴욕 기준 오늘 날짜가 곧 이 리포트가 다루는 거래일.
@@ -473,13 +572,17 @@ def send_email(report_date, items):
         peg = f", PEG {it['peg_ratio']:.2f}" if it.get("peg_ratio") else ""
         cross = f", {it['cross_signal']}" if it.get("cross_signal") and it["cross_signal"] != "크로스 없음" else ""
         rating = f", {it['analyst_rating']}" if it.get("analyst_rating") else ""
-        score = it.get("buy_score")
-        score_txt = f", 매수근접도 {score:.0f}점({it.get('buy_score_label')})" if score is not None else ""
+        buy_score = it.get("buy_score")
+        sell_score = it.get("sell_score")
+        buy_txt = f", 매수근접도 {buy_score:.0f}점({it.get('buy_score_label')})" if buy_score is not None else ""
+        sell_txt = f", 매도근접도 {sell_score:.0f}점({it.get('sell_score_label')})" if sell_score is not None else ""
         news_txt = f", 📰뉴스 {len(it['news'])}건" if it.get("news") else ""
         pnl_txt = f", 보유 {it['quantity']}주 손익 {it['pnl_pct']:+.1f}%(${it['pnl_abs']:+.0f})" if it.get("pnl_pct") is not None else ""
-        icon = "🔥 " if score is not None and score >= 65 else "🎯 " if score is not None and score >= 40 else ""
+        buy_icon = "🔥" if buy_score is not None and buy_score >= 65 else "🎯" if buy_score is not None and buy_score >= 40 else ""
+        sell_icon = "⚠️" if sell_score is not None and sell_score >= 65 else "🔻" if sell_score is not None and sell_score >= 40 else ""
+        icon = f"{buy_icon}{sell_icon} " if buy_icon or sell_icon else ""
         lines.append(
-            f"{icon}{it['ticker']}: {it['close_price']} ({it['change_pct']:+.2f}%){pe}{peg}{cross}{score_txt}{pnl_txt}{rating}{news_txt}"
+            f"{icon}{it['ticker']}: {it['close_price']} ({it['change_pct']:+.2f}%){pe}{peg}{cross}{buy_txt}{sell_txt}{pnl_txt}{rating}{news_txt}"
         )
 
     holding_items = [it for it in items if it.get("pnl_abs") is not None]
@@ -500,6 +603,7 @@ def send_email(report_date, items):
         for it in items
         if it.get("buy_score") is not None and 40 <= it["buy_score"] < 65 and it["ticker"] not in strong_hits
     ]
+    sell_strong_hits = [it["ticker"] for it in items if it.get("sell_score") is not None and it["sell_score"] >= 65]
     breakouts = [it["ticker"] for it in items if it.get("cross_signal") and "골든크로스(오늘)" in it["cross_signal"]]
     event_tickers = [it["ticker"] for it in items if it.get("news")]
     prefix_parts = []
@@ -507,6 +611,8 @@ def send_email(report_date, items):
         prefix_parts.append(f"🔥 매수 근접(강): {', '.join(strong_hits)}")
     if watch_hits:
         prefix_parts.append(f"🎯 매수 근접(관망): {', '.join(watch_hits)}")
+    if sell_strong_hits:
+        prefix_parts.append(f"⚠️ 매도 근접(강): {', '.join(sell_strong_hits)}")
     if breakouts:
         prefix_parts.append(f"🚀 골든크로스 발생: {', '.join(breakouts)}")
     if event_tickers:
@@ -564,10 +670,10 @@ def main():
         if not technical:
             notes.append("일봉 히스토리 조회 실패")
 
-        # ^TNX 같은 지수/금리 티커는 PEG·EPS 개념이 없어 매수 근접도 점수가 무의미하므로 제외.
+        # ^TNX 같은 지수/금리 티커는 PEG·EPS 개념이 없어 매수/매도 근접도 점수가 무의미하므로 제외.
         is_equity = not ticker.startswith("^")
         if is_equity:
-            score = compute_buy_score(
+            buy_score = compute_buy_score(
                 close_price,
                 technical.get("swing_high"),
                 technical.get("swing_low"),
@@ -578,14 +684,33 @@ def main():
                 technical.get("ma_alignment"),
                 technical.get("cross_signal"),
             )
+            sell_score = compute_sell_score(
+                close_price,
+                technical.get("swing_high"),
+                technical.get("swing_low"),
+                technical.get("sma120"),
+                technical.get("sma200"),
+                high_52w,
+                peg_ratio,
+                technical.get("ma_alignment"),
+                technical.get("cross_signal"),
+            )
         else:
-            score = {
+            buy_score = {
                 "buy_score": None,
                 "buy_score_label": None,
                 "buy_score_detail": "지수/금리 티커는 매수 근접도 계산 대상 아님",
                 "nearest_support": None,
                 "nearest_support_label": None,
             }
+            sell_score = {
+                "sell_score": None,
+                "sell_score_label": None,
+                "sell_score_detail": "지수/금리 티커는 매도 근접도 계산 대상 아님",
+                "nearest_resistance": None,
+                "nearest_resistance_label": None,
+            }
+        score = {**buy_score, **sell_score}
 
         # 등락률이 큰(이벤트가 있었던) 종목만 뉴스 첨부 — 모든 종목에 공통 적용되는 규칙
         news = []

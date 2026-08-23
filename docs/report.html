@@ -6,7 +6,7 @@
 <title>미국주식 관심종목 리포트</title>
 <style>
   :root { color-scheme: light dark; }
-  body { font-family: -apple-system, "Segoe UI", sans-serif; max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  body { font-family: -apple-system, "Segoe UI", sans-serif; max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
   h1 { font-size: 1.3rem; margin-bottom: 4px; }
   h2 { font-size: 1.05rem; }
   .date { color: #666; margin-bottom: 24px; }
@@ -21,29 +21,35 @@
   .badge-watch { background: rgba(245,166,35,0.18); color: #b06f00; }
   .badge-far { background: rgba(127,127,127,0.15); color: #777; }
   tr.hit-target { background: rgba(46,125,50,0.08); }
+  tr.hit-sell { background: rgba(198,40,40,0.08); }
   .score-bar { display: inline-block; width: 60px; height: 6px; border-radius: 3px; background: rgba(127,127,127,0.2); position: relative; vertical-align: middle; margin-right: 6px; }
   .score-bar > span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: currentColor; }
   .nav { margin: 24px 0; display: flex; justify-content: space-between; }
   a { color: inherit; }
   .empty { color: #888; padding: 40px 0; text-align: center; }
-  .news-list { margin: 4px 0 0; padding-left: 16px; font-weight: normal; white-space: normal; }
+  .news-list { margin: 6px 0 0; padding-left: 16px; font-weight: normal; white-space: normal; }
   .news-list li { margin-bottom: 3px; }
   .news-list a { text-decoration: none; }
   .news-list a:hover { text-decoration: underline; }
+  .memo-cell { white-space: normal; text-align: left; max-width: 320px; line-height: 1.55; }
+  .detail-cell { white-space: normal; font-size: 0.78rem; color: #888; text-align: left; max-width: 200px; line-height: 1.5; }
+  th.sortable { cursor: pointer; user-select: none; }
+  th.sortable:hover { color: inherit; opacity: 0.7; }
+  th.sortable .arrow { font-size: 0.75em; opacity: 0.6; margin-left: 3px; }
 </style>
 </head>
 <body>
   <h1>미국주식 관심종목 리포트</h1>
   <div class="date" id="dateLabel">불러오는 중...</div>
   <p style="color:#888; font-size:0.85em; margin-top:-16px;">
-    매수 근접도는 지지선 근접도·눌림목 깊이·PEG(성장 대비 밸류에이션)·이동평균 추세를 조합한 공통 계산식(0~100점)이며,
-    종목마다 수동으로 넣은 값은 없습니다. 투자 조언이 아닌 개인 참고용 지표입니다.
+    매수/매도 근접도는 지지선·저항선 근접도, 눌림목 깊이/과열도, PEG(성장 대비 밸류에이션), 이동평균 추세를
+    조합한 대칭 계산식(0~100점)이며, 종목마다 수동으로 넣은 값은 없습니다. 투자 조언이 아닌 개인 참고용 지표입니다.
   </p>
 
   <h2 style="margin-top:32px;">보유종목 손익</h2>
   <div id="portfolio"></div>
 
-  <h2 style="margin-top:36px;">매수 근접도</h2>
+  <h2 style="margin-top:36px;">매수/매도 근접도</h2>
   <div id="compare"></div>
 
   <h2 style="margin-top:36px;">상세 데이터</h2>
@@ -66,17 +72,21 @@
       "pe_ratio", "peg_ratio", "sma20", "sma60", "sma120", "sma200", "ma_alignment", "cross_signal",
       "swing_high", "swing_high_date", "swing_low", "swing_low_date",
       "nearest_support", "nearest_support_label", "buy_score", "buy_score_label", "buy_score_detail",
+      "nearest_resistance", "nearest_resistance_label", "sell_score", "sell_score_label", "sell_score_detail",
       "analyst_rating", "target_price_avg", "target_price_high", "target_price_low",
       "thesis", "news", "quantity", "avg_buy_price", "pnl_pct", "pnl_abs", "note",
     ].join(",");
     const endpoint = `${url}/rest/v1/daily_reports?report_date=eq.${date}&select=id,report_date,summary,report_items(${fields})`;
 
-    function scoreBadge(score, label) {
+    function scoreBadge(score, label, kind) {
       if (score == null) return "-";
+      const strongColor = kind === "sell" ? "#c62828" : "#2e7d32";
+      const watchColor = kind === "sell" ? "#c65100" : "#b06f00";
       const cls = score >= 65 ? "badge-strong" : score >= 40 ? "badge-watch" : "badge-far";
-      const color = score >= 65 ? "#2e7d32" : score >= 40 ? "#b06f00" : "#777";
+      const color = score >= 65 ? strongColor : score >= 40 ? watchColor : "#777";
       const pct = Math.max(0, Math.min(100, score));
-      return `<span class="score-bar" style="color:${color}"><span style="width:${pct}%"></span></span><span class="badge ${cls}">${score.toFixed(0)}점 · ${label}</span>`;
+      const badgeStyle = score >= 65 ? `background:${strongColor}2e; color:${strongColor};` : score >= 40 ? `background:${watchColor}2e; color:${watchColor};` : "";
+      return `<span class="score-bar" style="color:${color}"><span style="width:${pct}%"></span></span><span class="badge" style="${badgeStyle}">${score.toFixed(0)}점 · ${label}</span>`;
     }
 
     function newsList(news) {
@@ -111,33 +121,67 @@
           portfolioEl.innerHTML = '<p class="empty" style="padding:16px 0;">보유종목이 없습니다.</p>';
         } else {
           const totalPnl = holdings.reduce((sum, it) => sum + (it.pnl_abs ?? 0), 0);
-          const pTable = document.createElement("table");
-          pTable.innerHTML = `
-            <thead><tr>
-              <th>종목</th><th>수량</th><th>평단가</th><th>현재가</th><th>평가손익</th><th>수익률</th>
-            </tr></thead>
-            <tbody>
-              ${holdings
-                .map((it) => {
-                  const cls = (it.pnl_pct ?? 0) >= 0 ? "up" : "down";
-                  const sign = (it.pnl_pct ?? 0) >= 0 ? "+" : "";
-                  return `<tr>
-                    <td>${it.ticker}</td>
-                    <td>${it.quantity}</td>
-                    <td>${it.avg_buy_price ?? "-"}</td>
-                    <td>${it.close_price ?? "-"}</td>
-                    <td class="${cls}">${it.pnl_abs != null ? sign + "$" + it.pnl_abs.toFixed(0) : "-"}</td>
-                    <td class="${cls}">${it.pnl_pct != null ? sign + it.pnl_pct.toFixed(1) + "%" : "-"}</td>
-                  </tr>`;
-                })
-                .join("")}
-            </tbody>`;
+          const columns = [
+            { key: "ticker", label: "종목" },
+            { key: "quantity", label: "수량" },
+            { key: "avg_buy_price", label: "평단가" },
+            { key: "close_price", label: "현재가" },
+            { key: "pnl_abs", label: "평가손익" },
+            { key: "pnl_pct", label: "수익률" },
+          ];
+          let sortKey = "pnl_pct";
+          let sortDir = -1; // -1 내림차순, 1 오름차순
+
           const pScroller = document.createElement("div");
           pScroller.className = "table-scroll";
+          const pTable = document.createElement("table");
           pScroller.appendChild(pTable);
+
+          function renderPortfolioTable() {
+            const rows = [...holdings].sort((a, b) => {
+              const av = a[sortKey], bv = b[sortKey];
+              if (typeof av === "string") return sortDir * String(av ?? "").localeCompare(String(bv ?? ""));
+              return sortDir * ((av ?? -Infinity) - (bv ?? -Infinity));
+            });
+            pTable.innerHTML = `
+              <thead><tr>
+                ${columns
+                  .map((c) => {
+                    const arrow = sortKey === c.key ? (sortDir === 1 ? "▲" : "▼") : "";
+                    return `<th class="sortable" data-key="${c.key}">${c.label}<span class="arrow">${arrow}</span></th>`;
+                  })
+                  .join("")}
+              </tr></thead>
+              <tbody>
+                ${rows
+                  .map((it) => {
+                    const cls = (it.pnl_pct ?? 0) >= 0 ? "up" : "down";
+                    const sign = (it.pnl_pct ?? 0) >= 0 ? "+" : "";
+                    return `<tr>
+                      <td>${it.ticker}</td>
+                      <td>${it.quantity}</td>
+                      <td>${it.avg_buy_price ?? "-"}</td>
+                      <td>${it.close_price ?? "-"}</td>
+                      <td class="${cls}">${it.pnl_abs != null ? sign + "$" + it.pnl_abs.toFixed(0) : "-"}</td>
+                      <td class="${cls}">${it.pnl_pct != null ? sign + it.pnl_pct.toFixed(1) + "%" : "-"}</td>
+                    </tr>`;
+                  })
+                  .join("")}
+              </tbody>`;
+            pTable.querySelectorAll("th.sortable").forEach((th) => {
+              th.addEventListener("click", () => {
+                const key = th.dataset.key;
+                sortDir = sortKey === key ? -sortDir : -1;
+                sortKey = key;
+                renderPortfolioTable();
+              });
+            });
+          }
+          renderPortfolioTable();
+
           const summary = document.createElement("p");
           summary.style.cssText = "margin:10px 2px 0; font-size:0.9rem;";
-          summary.innerHTML = `합산 평가손익: <span class="${totalPnl >= 0 ? "up" : "down"}">${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(0)}</span> (${holdings.length}종목)`;
+          summary.innerHTML = `합산 평가손익: <span class="${totalPnl >= 0 ? "up" : "down"}">${totalPnl >= 0 ? "+" : ""}$${totalPnl.toFixed(0)}</span> (${holdings.length}종목) · 표 제목을 클릭하면 정렬됩니다`;
           portfolioEl.appendChild(pScroller);
           portfolioEl.appendChild(summary);
         }
@@ -146,19 +190,22 @@
         const cTable = document.createElement("table");
         cTable.innerHTML = `
           <thead><tr>
-            <th>종목</th><th>매수 근접도</th><th>지지선</th><th>현재가</th><th>구성</th><th>내 메모</th>
+            <th>종목</th><th>현재가</th><th>매수 근접도</th><th>지지선</th><th>매도 근접도</th><th>저항선</th><th>내 메모</th>
           </tr></thead>
           <tbody>
             ${sorted
               .map((it) => {
-                const strong = it.buy_score != null && it.buy_score >= 65;
-                return `<tr class="${strong ? "hit-target" : ""}">
+                const buyStrong = it.buy_score != null && it.buy_score >= 65;
+                const sellStrong = it.sell_score != null && it.sell_score >= 65;
+                const rowCls = sellStrong ? "hit-sell" : buyStrong ? "hit-target" : "";
+                return `<tr class="${rowCls}">
                   <td>${it.ticker}</td>
-                  <td>${scoreBadge(it.buy_score, it.buy_score_label)}</td>
-                  <td>${it.nearest_support ?? "-"}${it.nearest_support_label ? ` <small>(${it.nearest_support_label})</small>` : ""}</td>
                   <td>${it.close_price ?? "-"}</td>
-                  <td style="white-space:normal; font-size:0.78rem; color:#888; text-align:left; max-width:220px;">${it.buy_score_detail ?? "-"}</td>
-                  <td style="white-space:normal; text-align:left; max-width:220px;">${it.thesis ?? "-"}${newsList(it.news)}</td>
+                  <td>${scoreBadge(it.buy_score, it.buy_score_label, "buy")}<div class="detail-cell" style="max-width:180px;">${it.buy_score_detail ?? ""}</div></td>
+                  <td>${it.nearest_support ?? "-"}${it.nearest_support_label ? ` <small>(${it.nearest_support_label})</small>` : ""}</td>
+                  <td>${scoreBadge(it.sell_score, it.sell_score_label, "sell")}<div class="detail-cell" style="max-width:180px;">${it.sell_score_detail ?? ""}</div></td>
+                  <td>${it.nearest_resistance ?? "-"}${it.nearest_resistance_label ? ` <small>(${it.nearest_resistance_label})</small>` : ""}</td>
+                  <td class="memo-cell">${it.thesis ? `<div>${it.thesis}</div>` : (it.news ? "" : "-")}${newsList(it.news)}</td>
                 </tr>`;
               })
               .join("")}

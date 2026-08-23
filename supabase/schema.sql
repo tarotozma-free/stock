@@ -66,6 +66,11 @@ create table if not exists report_items (
   buy_score numeric,             -- 지지선 근접도+눌림목 깊이+PEG+추세를 합친 0~100점 "매수 근접도" (공통 계산, 수동입력 없음)
   buy_score_label text,          -- 매수 근접(강한 신호) / 관망(접근 중) / 아직 매수권 아님
   buy_score_detail text,         -- 점수 구성 breakdown (투명성용)
+  nearest_resistance numeric,       -- 현재가 바로 위 가장 가까운 저항선 (스윙고점/120일선/200일선/52주고가 중 자동 선택)
+  nearest_resistance_label text,
+  sell_score numeric,             -- 저항선 근접도+과열도+PEG(비쌈)+추세를 합친 0~100점 "매도 근접도" (buy_score와 대칭 계산)
+  sell_score_label text,          -- 매도 근접(강한 신호) / 관망(경계) / 아직 매도권 아님
+  sell_score_detail text,
   analyst_rating text,        -- 예: "매수18/보유5/매도1"
   target_price_avg numeric,   -- 애널리스트 목표주가 평균 (Finnhub 유료 플랜 필요, 무료 플랜은 비어있음)
   target_price_high numeric,
@@ -97,6 +102,11 @@ alter table report_items add column if not exists nearest_support_label text;
 alter table report_items add column if not exists buy_score numeric;
 alter table report_items add column if not exists buy_score_label text;
 alter table report_items add column if not exists buy_score_detail text;
+alter table report_items add column if not exists nearest_resistance numeric;
+alter table report_items add column if not exists nearest_resistance_label text;
+alter table report_items add column if not exists sell_score numeric;
+alter table report_items add column if not exists sell_score_label text;
+alter table report_items add column if not exists sell_score_detail text;
 alter table report_items add column if not exists analyst_rating text;
 alter table report_items add column if not exists target_price_avg numeric;
 alter table report_items add column if not exists target_price_high numeric;
