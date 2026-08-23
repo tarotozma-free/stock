@@ -126,7 +126,8 @@ def get_nasdaq100_tickers():
 
 def scan_top_picks(exclude_tickers, report_date, limit=TOP_PICKS_COUNT):
     """관심종목·보유종목이 아닌 나스닥100 종목 중 매수 근접도가 가장 높은 상위 N개를 찾는다.
-    watchlist 종목과 완전히 동일한 계산식(compute_buy_score)을 그대로 적용할 뿐, 별도 로직은 없다."""
+    watchlist 종목과 완전히 동일한 계산식(compute_buy_score)을 그대로 적용할 뿐, 별도 로직은 없다.
+    단, 대세 하락추세(역배열)인 종목은 지지선/PEG가 좋아 보여도 회복까지 오래 걸릴 수 있어 후보에서 제외한다."""
     universe = [t for t in get_nasdaq100_tickers() if t not in exclude_tickers]
     candidates = []
     for ticker in universe:
@@ -139,6 +140,9 @@ def scan_top_picks(exclude_tickers, report_date, limit=TOP_PICKS_COUNT):
             high_52w, low_52w, pe_ratio, peg_ratio = get_metrics(ticker)
             technical = compute_technical(ticker, q, str(report_date))
             if not technical:
+                continue
+            # 대세 하락추세(역배열)는 지지선/PEG가 좋아 보여도 회복까지 오래 걸릴 수 있어 후보에서 제외.
+            if technical.get("ma_alignment") == "역배열(하락추세)":
                 continue
             score = compute_buy_score(
                 close_price,
