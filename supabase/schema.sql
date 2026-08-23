@@ -44,6 +44,7 @@ create table if not exists report_items (
   id bigint generated always as identity primary key,
   report_id bigint not null references daily_reports(id) on delete cascade,
   ticker text not null,
+  display_name text,   -- 당시 watchlist.display_name 스냅샷 (종목명 표시용)
   close_price numeric,
   prev_close numeric,
   change_pct numeric,
@@ -85,6 +86,7 @@ create table if not exists report_items (
 );
 
 -- 기존에 이미 테이블을 만든 경우를 위한 안전장치 (컬럼 추가/정리)
+alter table report_items add column if not exists display_name text;
 alter table report_items add column if not exists pe_ratio numeric;
 alter table report_items add column if not exists peg_ratio numeric;
 alter table report_items add column if not exists sma20 numeric;

@@ -75,7 +75,7 @@
 
     const { url, anonKey } = window.SUPABASE_CONFIG;
     const fields = [
-      "ticker", "close_price", "prev_close", "change_pct", "high_52w", "low_52w",
+      "ticker", "display_name", "close_price", "prev_close", "change_pct", "high_52w", "low_52w",
       "pe_ratio", "peg_ratio", "sma20", "sma60", "sma120", "sma200", "ma_alignment", "cross_signal",
       "swing_high", "swing_high_date", "swing_low", "swing_low_date",
       "nearest_support", "nearest_support_label", "buy_score", "buy_score_label", "buy_score_detail",
@@ -96,10 +96,19 @@
       return `<span class="score-bar" style="color:${color}"><span style="width:${pct}%"></span></span><span class="badge" style="${badgeStyle}">${score.toFixed(0)}점 · ${label}</span>`;
     }
 
+    function tickerLabel(it) {
+      return it.display_name
+        ? `${it.ticker} <small style="color:#888; font-weight:400;">${it.display_name}</small>`
+        : it.ticker;
+    }
+
     function newsList(news) {
       if (!news || !news.length) return "";
       const items = news
-        .map((n) => `<li><a href="${n.url}" target="_blank" rel="noopener">${n.headline}</a> <small>(${n.source ?? ""}${n.date ? ", " + n.date : ""})</small></li>`)
+        .map(
+          (n) =>
+            `<li><a href="${n.url}" target="_blank" rel="noopener" title="${(n.headline ?? "").replace(/"/g, "&quot;")}">${n.headline_ko ?? n.headline}</a> <small>(${n.source ?? ""}${n.date ? ", " + n.date : ""})</small></li>`
+        )
         .join("");
       return `<ul class="news-list">${items}</ul>`;
     }
@@ -165,7 +174,7 @@
                     const cls = (it.pnl_pct ?? 0) >= 0 ? "up" : "down";
                     const sign = (it.pnl_pct ?? 0) >= 0 ? "+" : "";
                     return `<tr>
-                      <td>${it.ticker}</td>
+                      <td>${tickerLabel(it)}</td>
                       <td>${it.quantity}</td>
                       <td>${it.avg_buy_price ?? "-"}</td>
                       <td>${it.close_price ?? "-"}</td>
@@ -206,7 +215,7 @@
                 const sellStrong = it.sell_score != null && it.sell_score >= 65;
                 const rowCls = sellStrong ? "hit-sell" : buyStrong ? "hit-target" : "";
                 return `<tr class="${rowCls}">
-                  <td>${it.ticker}</td>
+                  <td>${tickerLabel(it)}</td>
                   <td>${it.close_price ?? "-"}</td>
                   <td>${scoreBadge(it.buy_score, it.buy_score_label, "buy")}<div class="detail-cell" style="max-width:180px;">${it.buy_score_detail ?? ""}</div></td>
                   <td>${it.nearest_support ?? "-"}${it.nearest_support_label ? ` <small>(${it.nearest_support_label})</small>` : ""}</td>
@@ -240,7 +249,7 @@
                 const sign = pct >= 0 ? "+" : "";
                 const warn = it.note ? ` <small title="${it.note}">⚠️</small>` : "";
                 return `<tr>
-                  <td>${it.ticker}${warn}</td>
+                  <td>${tickerLabel(it)}${warn}</td>
                   <td>${it.close_price ?? "-"}</td>
                   <td class="${cls}">${pct != null ? sign + pct.toFixed(2) + "%" : "-"}</td>
                   <td>${it.pe_ratio != null ? it.pe_ratio.toFixed(1) : "-"}</td>

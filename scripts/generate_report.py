@@ -172,8 +172,26 @@ def _is_relevant_headline(headline, ticker, display_name):
     return any(c in text for c in candidates if c)
 
 
+def translate_to_ko(text):
+    """영어 헤드라인을 한국어로 번역 (무료 MyMemory API, 키 불필요).
+    실패하면 원문을 그대로 반환 — 번역 실패가 리포트 생성을 막지 않도록."""
+    if not text:
+        return text
+    try:
+        r = requests.get(
+            "https://api.mymemory.translated.net/get",
+            params={"q": text, "langpair": "en|ko"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        translated = r.json().get("responseData", {}).get("translatedText")
+        return translated or text
+    except Exception:
+        return text
+
+
 def get_company_news(ticker, display_name=None, days=3, limit=3):
-    """등락률이 큰(이벤트가 있었던) 종목에 대해 최근 뉴스 헤드라인을 가져온다.
+    """등락률이 큰(이벤트가 있었던) 종목에 대해 최근 뉴스 헤드라인을 가져와 한국어로 번역한다.
     적정가 판단에 참고할 수 있도록 헤드라인/출처/링크만 간단히 담는다."""
     try:
         today = datetime.now(ZoneInfo("America/New_York")).date()
@@ -190,6 +208,7 @@ def get_company_news(ticker, display_name=None, days=3, limit=3):
         return [
             {
                 "headline": a.get("headline"),
+                "headline_ko": translate_to_ko(a.get("headline")),
                 "source": a.get("source"),
                 "url": a.get("url"),
                 "date": datetime.fromtimestamp(a["datetime"], tz=ZoneInfo("America/New_York")).date().isoformat()
@@ -731,6 +750,7 @@ def main():
         items.append(
             {
                 "ticker": ticker,
+                "display_name": row.get("display_name"),
                 "close_price": close_price,
                 "prev_close": prev_close,
                 "change_pct": change_pct,
