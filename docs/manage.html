@@ -40,9 +40,10 @@
   <div class="nav"><a href="history.html">← 리포트 히스토리</a></div>
 
   <section id="loginBox">
-    <p>본인 이메일로 로그인 링크를 받아 접속하세요.</p>
-    <input id="loginEmail" type="email" placeholder="you@gmail.com" />
-    <button id="loginBtn">로그인 링크 받기</button>
+    <p>이메일 + 비밀번호로 로그인하세요. (한 번 로그인하면 이 브라우저엔 계속 로그인 상태가 유지됩니다)</p>
+    <input id="loginEmail" type="email" placeholder="you@gmail.com" style="margin-bottom:8px;" />
+    <input id="loginPassword" type="password" placeholder="비밀번호" style="margin-bottom:8px;" />
+    <button id="loginBtn">로그인</button>
     <p class="msg" id="loginMsg"></p>
   </section>
 
@@ -96,15 +97,20 @@
 
     document.getElementById("loginBtn").addEventListener("click", async () => {
       const email = document.getElementById("loginEmail").value.trim();
-      if (!email) return;
-      loginMsg.textContent = "전송 중...";
+      const password = document.getElementById("loginPassword").value;
+      if (!email || !password) return;
+      loginMsg.textContent = "로그인 중...";
       loginMsg.className = "msg";
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: location.href },
-      });
-      loginMsg.textContent = error ? `실패: ${error.message}` : "로그인 링크를 이메일로 보냈습니다. 메일함을 확인하세요.";
-      loginMsg.className = error ? "msg error" : "msg";
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        loginMsg.textContent = `실패: ${error.message}`;
+        loginMsg.className = "msg error";
+      }
+      // 성공하면 onAuthStateChange가 알아서 화면을 전환함
+    });
+
+    document.getElementById("loginPassword").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") document.getElementById("loginBtn").click();
     });
 
     document.getElementById("logoutBtn").addEventListener("click", async () => {

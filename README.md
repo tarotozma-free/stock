@@ -11,7 +11,7 @@
 - `scripts/generate_report.py` — 시세·기술적 지표 수집 → 매수/매도 근접도 계산 → Supabase 저장 (이메일은 선택)
 - `.github/workflows/daily-report.yml` — 화~토 07:00 KST 자동 실행 (GitHub Actions)
 - `docs/` — GitHub Pages로 서빙되는 리포트 뷰어(`report.html`, `history.html`)와
-  관심종목/보유종목 관리 앱(`manage.html`, 매직링크 로그인 필요)
+  관심종목/보유종목 관리 앱(`manage.html`, 이메일+비밀번호 로그인 필요)
 
 ## 매수 근접도 점수 (핵심 로직)
 
@@ -63,19 +63,18 @@ Yahoo Finance 차트 API(무료, 키 불필요)에서 가져옵니다.
 
 ### 1-1. 관리 앱(manage.html) 접근 잠그기 — 중요
 
-`manage.html`은 매직링크 로그인 후 watchlist/holdings에 직접 쓰기(추가/수정/삭제)를
-할 수 있는 페이지라, 본인 외에는 로그인 자체가 안 되게 막아야 합니다.
+`manage.html`은 이메일+비밀번호 로그인 후 watchlist/holdings에 직접 쓰기(추가/수정/삭제)를
+할 수 있는 페이지라, 본인 외에는 로그인 자체가 안 되게 막아야 합니다. 로그인은 한 번만 하면
+그 브라우저엔 세션이 계속 유지되므로(로그아웃 전까지) 매번 이메일을 확인할 필요는 없습니다.
 
 1. Supabase Dashboard > Authentication > Sign In / Providers (또는 Settings) 에서
-   **"Allow new user signups"(신규 가입 허용)를 끕니다.** 이렇게 해두면 신규 이메일로
-   `signInWithOtp`를 호출해도 계정이 자동 생성되지 않습니다.
+   **"Allow new user signups"(신규 가입 허용)를 끕니다.** 이렇게 해두면 본인이 만든 계정
+   외에는 로그인 자체가 불가능합니다.
 2. Authentication > Users 에서 **본인 이메일 계정을 미리 하나 추가**합니다
-   (Add user > 본인 이메일 입력, 비밀번호는 아무거나/랜덤이어도 무방 — 매직링크로만 로그인할 것이므로).
-3. Authentication > URL Configuration 에서 **Redirect URLs**에 `manage.html`의 실제 주소
-   (예: `https://username.github.io/repo-name/docs/manage.html`)를 추가합니다.
-   (안 해두면 매직링크 클릭 후 로그인이 안 붙습니다.)
-4. 이후 `manage.html`에서 본인 이메일로 로그인 링크를 요청하면 정상 로그인되고,
-   그 외 이메일은 계정이 없어 로그인 링크 요청이 실패합니다.
+   (Add user > 이메일 입력 + 기억할 수 있는 비밀번호 설정 + "Auto Confirm User" 체크).
+   이 비밀번호로 `manage.html`에서 바로 로그인합니다.
+3. `manage.html`에서 2번에 등록한 이메일/비밀번호로 로그인하면 되고, 그 외 계정은 로그인 자체가
+   실패합니다.
 
 ### 2. Finnhub API 키
 
