@@ -43,6 +43,14 @@
   th.sortable { cursor: pointer; user-select: none; }
   th.sortable:hover { color: inherit; opacity: 0.7; }
   th.sortable .arrow { font-size: 0.75em; opacity: 0.6; margin-left: 3px; }
+  .tabs { display: flex; gap: 6px; margin-top: 24px; border-bottom: 1px solid #e0e0e0; }
+  .tab-btn {
+    padding: 10px 16px; border: none; background: none; color: inherit; font-size: 0.95rem;
+    font-weight: 600; cursor: pointer; opacity: 0.55; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab-btn.active { opacity: 1; border-bottom-color: currentColor; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
 </style>
 </head>
 <body>
@@ -53,14 +61,24 @@
     조합한 대칭 계산식(0~100점)이며, 종목마다 수동으로 넣은 값은 없습니다. 투자 조언이 아닌 개인 참고용 지표입니다.
   </p>
 
-  <h2 style="margin-top:32px;">보유종목 손익</h2>
-  <div id="portfolio"></div>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="tab-holdings">보유종목 리포트</button>
+    <button class="tab-btn" data-tab="tab-watchlist">관심종목 리포트</button>
+  </div>
 
-  <h2 style="margin-top:36px;">매수/매도 근접도</h2>
-  <div id="compare"></div>
+  <div id="tab-holdings" class="tab-panel active">
+    <h2 style="margin-top:24px;">보유종목 손익</h2>
+    <div id="portfolio"></div>
+  </div>
 
-  <h2 style="margin-top:36px;">상세 데이터</h2>
-  <div id="content"></div>
+  <div id="tab-watchlist" class="tab-panel">
+    <h2 style="margin-top:24px;">매수/매도 근접도</h2>
+    <div id="compare"></div>
+
+    <h2 style="margin-top:36px;">상세 데이터</h2>
+    <div id="content"></div>
+  </div>
+
   <div class="nav">
     <a href="history.html">← 전체 히스토리 보기</a>
     &nbsp;·&nbsp;
@@ -275,6 +293,15 @@
       .catch((e) => {
         document.getElementById("content").innerHTML = `<div class="empty">불러오기 실패: ${e}</div>`;
       });
+
+    document.querySelectorAll(".tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+        document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+        btn.classList.add("active");
+        document.getElementById(btn.dataset.tab).classList.add("active");
+      });
+    });
 
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
