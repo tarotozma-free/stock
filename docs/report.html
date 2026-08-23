@@ -51,6 +51,22 @@
   .tab-btn.active { opacity: 1; border-bottom-color: currentColor; }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
+  .ticker-link { background: none; border: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; }
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    z-index: 100; align-items: center; justify-content: center; padding: 16px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: var(--modal-bg, #fff); color: inherit; border-radius: 12px; width: 100%; max-width: 900px;
+    max-height: 90vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  @media (prefers-color-scheme: dark) { .modal-box { --modal-bg: #1b1f27; } }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid rgba(127,127,127,0.25); }
+  .modal-head h3 { margin: 0; font-size: 1rem; }
+  .modal-close { background: none; border: none; font-size: 1.3rem; cursor: pointer; color: inherit; line-height: 1; padding: 4px 8px; }
+  .modal-hint { font-size: 0.78rem; color: #888; padding: 8px 16px 0; }
+  #chartContainer { flex: 1; min-height: 420px; }
 </style>
 </head>
 <body>
@@ -85,6 +101,17 @@
     <a href="manage.html">관심종목/보유종목 관리</a>
   </div>
 
+  <div id="chartModal" class="modal-overlay">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3 id="chartTitle"></h3>
+        <button class="modal-close" id="chartClose">✕</button>
+      </div>
+      <p class="modal-hint">차트 안의 "지표"(Indicators) 버튼으로 이동평균선(20/60/120/200일)을 직접 추가하면 골든/데드크로스를 눈으로 확인할 수 있어요.</p>
+      <div id="chartContainer"></div>
+    </div>
+  </div>
+
   <script src="config.js"></script>
   <script>
     const params = new URLSearchParams(location.search);
@@ -115,9 +142,8 @@
     }
 
     function tickerLabel(it) {
-      return it.display_name
-        ? `${it.ticker} <small style="color:#888; font-weight:400;">${it.display_name}</small>`
-        : it.ticker;
+      const nameHtml = it.display_name ? ` <small style="color:#888; font-weight:400;">${it.display_name}</small>` : "";
+      return `<button type="button" class="ticker-link" data-ticker="${it.ticker}" data-name="${it.display_name ?? ""}">${it.ticker}</button>${nameHtml}`;
     }
 
     function newsList(news) {
@@ -293,6 +319,76 @@
       .catch((e) => {
         document.getElementById("content").innerHTML = `<div class="empty">불러오기 실패: ${e}</div>`;
       });
+
+    // ---------- 종목 클릭 시 차트 모달 (무료 TradingView 위젯) ----------
+    const TICKER_SYMBOL_MAP = { "^TNX": "TVC:US10Y" }; // 지수/금리처럼 TradingView 심볼이 다른 경우만 매핑
+    let tvScriptLoaded = false;
+    let tvScriptLoading = null;
+
+    function loadTvScript() {
+      if (tvScriptLoaded) return Promise.resolve();
+      if (tvScriptLoading) return tvScriptLoading;
+      tvScriptLoading = new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://s3.tradingview.com/tv.js";
+        s.onload = () => {
+          tvScriptLoaded = true;
+          resolve();
+        };
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+      return tvScriptLoading;
+    }
+
+    const chartModal = document.getElementById("chartModal");
+    const chartTitle = document.getElementById("chartTitle");
+    const chartContainer = document.getElementById("chartContainer");
+
+    function openChart(ticker, name) {
+      const symbol = TICKER_SYMBOL_MAP[ticker] || ticker;
+      chartTitle.textContent = name ? `${ticker} · ${name}` : ticker;
+      chartContainer.innerHTML = "";
+      chartModal.classList.add("open");
+      const isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      loadTvScript()
+        .then(() => {
+          new TradingView.widget({
+            autosize: true,
+            symbol,
+            interval: "D",
+            timezone: "Asia/Seoul",
+            theme: isDark ? "dark" : "light",
+            style: "1",
+            locale: "kr",
+            enable_publishing: false,
+            hide_top_toolbar: false,
+            hide_legend: false,
+            allow_symbol_change: false,
+            container_id: "chartContainer",
+          });
+        })
+        .catch(() => {
+          chartContainer.innerHTML = '<p class="empty">차트를 불러오지 못했습니다.</p>';
+        });
+    }
+
+    function closeChart() {
+      chartModal.classList.remove("open");
+      chartContainer.innerHTML = "";
+    }
+
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest(".ticker-link");
+      if (btn) {
+        openChart(btn.dataset.ticker, btn.dataset.name);
+        return;
+      }
+      if (e.target === chartModal || e.target.id === "chartClose") closeChart();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeChart();
+    });
 
     document.querySelectorAll(".tab-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
