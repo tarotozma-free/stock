@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>리포트 히스토리</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, "Segoe UI", sans-serif; max-width: 640px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.3rem; margin-bottom: 24px; }
+  ul { list-style: none; padding: 0; }
+  li { border-bottom: 1px solid #e0e0e0; }
+  a { display: block; padding: 12px 4px; text-decoration: none; color: inherit; }
+  a:hover { background: rgba(127,127,127,0.08); }
+  .empty { color: #888; padding: 40px 0; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>리포트 히스토리</h1>
+  <p><a href="manage.html">관심종목/보유종목 관리 →</a></p>
+  <ul id="list"><li class="empty">불러오는 중...</li></ul>
+
+  <script src="config.js"></script>
+  <script>
+    const { url, anonKey } = window.SUPABASE_CONFIG;
+    const endpoint = `${url}/rest/v1/daily_reports?select=report_date&order=report_date.desc`;
+
+    fetch(endpoint, {
+      headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+    })
+      .then((r) => r.json())
+      .then((rows) => {
+        const list = document.getElementById("list");
+        if (!rows.length) {
+          list.innerHTML = '<li class="empty">아직 리포트가 없습니다.</li>';
+          return;
+        }
+        list.innerHTML = rows
+          .map((r) => `<li><a href="report.html?date=${r.report_date}">${r.report_date}</a></li>`)
+          .join("");
+      })
+      .catch((e) => {
+        document.getElementById("list").innerHTML = `<li class="empty">불러오기 실패: ${e}</li>`;
+      });
+  </script>
+</body>
+</html>

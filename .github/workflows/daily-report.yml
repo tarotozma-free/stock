@@ -1,0 +1,31 @@
+name: Daily Stock Report
+
+on:
+  schedule:
+    # 22:00 UTC, 월~금 = 07:00 KST, 화~토 (미국 월~금 장마감 다음날 아침)
+    - cron: "0 22 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  generate-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Generate report and send email
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          REPORT_BASE_URL: ${{ secrets.REPORT_BASE_URL }}
+        run: python scripts/generate_report.py
