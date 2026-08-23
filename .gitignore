@@ -1,3 +1,5 @@
 .env
 __pycache__/
 *.pyc
+scratch_*
+.claude/scheduled_tasks.lock
