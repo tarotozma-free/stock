@@ -188,6 +188,8 @@
             { key: "close_price", label: "현재가" },
             { key: "pnl_abs", label: "평가손익" },
             { key: "pnl_pct", label: "수익률" },
+            { key: "buy_score", label: "매수 근접도" },
+            { key: "sell_score", label: "매도 근접도" },
           ];
           let sortKey = "pnl_pct";
           let sortDir = -1; // -1 내림차순, 1 오름차순
@@ -224,6 +226,8 @@
                       <td>${it.close_price ?? "-"}</td>
                       <td class="${cls}">${it.pnl_abs != null ? sign + "$" + it.pnl_abs.toFixed(0) : "-"}</td>
                       <td class="${cls}">${it.pnl_pct != null ? sign + it.pnl_pct.toFixed(1) + "%" : "-"}</td>
+                      <td>${scoreBadge(it.buy_score, it.buy_score_label, "buy")}</td>
+                      <td>${scoreBadge(it.sell_score, it.sell_score_label, "sell")}</td>
                     </tr>`;
                   })
                   .join("")}
