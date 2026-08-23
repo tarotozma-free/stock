@@ -1,14 +1,14 @@
 # 미국주식 관심종목 일일 리포트
 
-미국장(월~금) 마감 다음날 아침(한국시간 화~토 07:00)에 관심종목 시세를 정리해
-이메일로 리포트 링크를 보내주는 자동화 시스템입니다. 리포트는 Supabase에 날짜별로
-쌓이고, GitHub Pages 페이지에서 링크로 바로 열람하거나 과거 날짜를 히스토리에서
-찾아볼 수 있습니다.
+미국장(월~금) 마감 다음날 아침(한국시간 화~토 07:00)에 관심종목·보유종목 시세를
+자동으로 갱신해 GitHub Pages 페이지에 쌓아두는 시스템입니다. 이메일 발송은 선택
+사항이고(기본은 꺼져 있음), 그냥 매일 `report.html`에 접속해서 보는 방식이 기본
+사용법입니다. 과거 날짜는 히스토리에서 언제든 다시 볼 수 있습니다.
 
 ## 구성
 
 - `supabase/schema.sql` — DB 스키마 (watchlist / holdings / daily_reports / report_items / send_log)
-- `scripts/generate_report.py` — 시세·기술적 지표 수집 → Supabase 저장 → 이메일 발송
+- `scripts/generate_report.py` — 시세·기술적 지표 수집 → 매수/매도 근접도 계산 → Supabase 저장 (이메일은 선택)
 - `.github/workflows/daily-report.yml` — 화~토 07:00 KST 자동 실행 (GitHub Actions)
 - `docs/` — GitHub Pages로 서빙되는 리포트 뷰어(`report.html`, `history.html`)와
   관심종목/보유종목 관리 앱(`manage.html`, 매직링크 로그인 필요)
@@ -28,6 +28,9 @@
 
 65점 이상 "매수 근접(강한 신호)", 40~64점 "관망(접근 중)", 그 미만 "아직 매수권 아님"으로 분류합니다.
 점수 구성(`buy_score_detail`)이 그대로 저장돼 왜 그 점수가 나왔는지 항상 확인할 수 있습니다.
+
+**매도 근접도**도 완전히 대칭되는 계산(`compute_sell_score`)으로 함께 산출됩니다 — 저항선 근접도,
+급등 과열도(직전 저점 대비 얼마나 올랐는지), PEG(비쌀수록 높은 점수), 역배열/데드크로스 가산.
 
 **알려진 한계**: PEG는 최근 실적이 부진하거나 적자인 종목(예: 턴어라운드 성장주)에서 왜곡될 수 있습니다
 — 트레일링 이익 기준이라 "지금은 안 좋아도 미래 EPS가 급성장할 것"이라는 전망을 반영하지 못합니다.
@@ -55,8 +58,8 @@ Yahoo Finance 차트 API(무료, 키 불필요)에서 가져옵니다.
    - `service_role` key → `SUPABASE_SERVICE_KEY` (절대 공개 저장소나 docs/에 넣지 말 것)
 4. `watchlist` 테이블에서 관심종목 티커를 원하는 대로 추가/삭제 (예시로 CAT/NVDA/PLTR이 들어있음).
    `thesis`는 자유 메모 칸이고 계산에는 쓰이지 않습니다 — `manage.html`에서 편하게 편집 가능
-5. 실제 보유 중인 종목은 `holdings` 테이블에 티커/수량/평단가를 기록 (선택 사항, 아직 리포트에는
-   반영되지 않고 테이블만 준비된 상태 — 다음 단계에서 연동 예정)
+5. 실제 보유 중인 종목은 `holdings` 테이블에 티커/수량/평단가를 기록 — **관심종목에 없어도 자동으로
+   리포트에 포함되고 평단가 대비 수익률(`pnl_pct`/`pnl_abs`)까지 계산됩니다**
 
 ### 1-1. 관리 앱(manage.html) 접근 잠그기 — 중요
 
@@ -78,11 +81,15 @@ Yahoo Finance 차트 API(무료, 키 불필요)에서 가져옵니다.
 
 https://finnhub.io 무료 가입 후 API 키 발급 → `FINNHUB_API_KEY`
 
-### 3. Gmail 발신 계정
+### 3. Gmail 발신 계정 (선택 — 이메일 알림을 원할 때만)
+
+기본값은 이메일 발송 없이 DB 저장만 합니다. 그냥 매일 웹페이지로 확인하는 방식이면 이 단계는
+건너뛰어도 됩니다. 이메일도 받고 싶으면:
 
 1. 발신용 Gmail 계정에서 2단계 인증 활성화
 2. https://myaccount.google.com/apppasswords 에서 앱 비밀번호 생성 → `GMAIL_APP_PASSWORD`
 3. `GMAIL_USER`는 이 Gmail 주소, `RECIPIENT_EMAIL`은 리포트 받을 주소(같아도 무방)
+4. 아래 5단계에서 이 3개 Secrets를 추가로 등록하면 자동으로 이메일 발송이 켜집니다
 
 ### 4. GitHub 저장소 & Pages
 
@@ -94,20 +101,21 @@ https://finnhub.io 무료 가입 후 API 키 발급 → `FINNHUB_API_KEY`
 
 ### 5. GitHub Actions Secrets 등록
 
-저장소 Settings > Secrets and variables > Actions 에서 아래 값을 모두 등록:
+저장소 Settings > Secrets and variables > Actions 에서 등록 (필수 4개):
 
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_KEY`
 - `FINNHUB_API_KEY`
-- `GMAIL_USER`
-- `GMAIL_APP_PASSWORD`
-- `RECIPIENT_EMAIL`
 - `REPORT_BASE_URL`
+
+이메일도 받고 싶으면 추가로 (선택):
+
+- `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `RECIPIENT_EMAIL`
 
 ### 6. 동작 확인
 
 - Actions 탭에서 `Daily Stock Report` 워크플로우를 `Run workflow`로 수동 실행해 테스트
-- 이메일이 오는지, 링크의 리포트 페이지가 뜨는지 확인
+- `report.html`에 그날 데이터가 갱신됐는지 확인 (이메일 Secrets를 안 넣었다면 이메일은 안 옴 — 정상)
 - 정상 확인되면 이후엔 매주 화~토 07:00 KST에 자동 실행됨
 
 ## 로컬 테스트
@@ -128,7 +136,6 @@ python scripts/generate_report.py
 
 ## 향후 확장 아이디어
 
-- 미국 증시 휴장일 캘린더 체크 후 휴장일엔 발송 스킵
-- `holdings`(보유종목) 평단가 대비 현재가 수익률을 리포트/앱에 반영
-- 뉴스 헤드라인, 거래량 등 리포트 항목 확대
+- 미국 증시 휴장일 캘린더 체크 후 휴장일엔 실행 스킵
 - 실패 시 재시도 로직 강화
+- 뉴스 필터링 정교화, 거래량 등 리포트 항목 확대

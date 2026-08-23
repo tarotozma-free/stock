@@ -19,13 +19,14 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Generate report and send email
+      - name: Generate report
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          REPORT_BASE_URL: ${{ secrets.REPORT_BASE_URL }}
+          # 이메일도 받고 싶으면 아래 3개를 저장소 Secrets에 추가로 등록하면 자동으로 켜짐 (선택 사항)
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          REPORT_BASE_URL: ${{ secrets.REPORT_BASE_URL }}
         run: python scripts/generate_report.py

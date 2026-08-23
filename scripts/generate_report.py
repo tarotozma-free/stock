@@ -1,19 +1,20 @@
 """
-관심종목 일일 리포트 생성 + 이메일 발송 스크립트.
+관심종목 일일 리포트 생성 스크립트.
 
 동작:
-1. Supabase에서 활성 관심종목(watchlist) 조회
-2. Finnhub에서 종목별 시세(종가/전일종가/등락률) + 52주 고가/저가 조회
-3. Supabase에 해당 미국 거래일(daily_reports/report_items)로 저장
-4. GitHub Pages 리포트 링크를 포함한 이메일 발송
-5. 발송 결과를 send_log에 기록
+1. Supabase에서 활성 관심종목(watchlist) + 보유종목(holdings) 조회
+2. Finnhub/Yahoo Finance에서 시세·기술적 지표·PEG·뉴스 조회 후 매수/매도 근접도 계산
+3. Supabase에 해당 미국 거래일(daily_reports/report_items)로 저장 — report.html이 이 데이터를 그대로 보여줌
+4. (선택) Gmail 계정이 설정돼 있으면 이메일도 발송. 안 넣으면 이메일 없이 DB 저장만 하고 끝남
 
 필요한 환경변수:
   SUPABASE_URL, SUPABASE_SERVICE_KEY  - Supabase 프로젝트 설정 > API
   FINNHUB_API_KEY                     - finnhub.io 무료 API 키
+  REPORT_BASE_URL                     - GitHub Pages 주소 (예: https://<user>.github.io/<repo>/docs)
+
+선택 환경변수 (이메일 발송을 원할 때만):
   GMAIL_USER, GMAIL_APP_PASSWORD      - Gmail 발신 계정 + 앱 비밀번호(2단계 인증 필요)
   RECIPIENT_EMAIL                     - 리포트 받을 이메일 (기본값: GMAIL_USER)
-  REPORT_BASE_URL                     - GitHub Pages 주소 (예: https://<user>.github.io/<repo>/docs)
 """
 
 import os
@@ -28,10 +29,12 @@ import requests
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 FINNHUB_API_KEY = os.environ["FINNHUB_API_KEY"]
-GMAIL_USER = os.environ["GMAIL_USER"]
-GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", GMAIL_USER)
 REPORT_BASE_URL = os.environ["REPORT_BASE_URL"].rstrip("/")
+
+GMAIL_USER = os.environ.get("GMAIL_USER")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
+RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", GMAIL_USER)
+EMAIL_ENABLED = bool(GMAIL_USER and GMAIL_APP_PASSWORD)
 
 EVENT_MOVE_THRESHOLD_PCT = 5.0  # 등락률이 이 값 이상이면 "이벤트 있었던 종목"으로 보고 뉴스 첨부
 
@@ -753,11 +756,16 @@ def main():
 
     report_id = upsert_report(report_date)
     save_items(report_id, items)
+    print(f"리포트 생성 완료: {report_date} ({len(items)}개 종목) - {REPORT_BASE_URL}/report.html?date={report_date}")
+
+    if not EMAIL_ENABLED:
+        print("GMAIL_USER/GMAIL_APP_PASSWORD 미설정 - 이메일 발송 없이 종료")
+        return
 
     try:
         send_email(report_date, items)
         log_send(report_id, "success", f"{len(items)}개 종목 발송")
-        print(f"리포트 생성 및 발송 완료: {report_date}")
+        print("이메일 발송 완료")
     except Exception as e:
         log_send(report_id, "failed", str(e))
         print(f"이메일 발송 실패: {e}")
