@@ -20,6 +20,7 @@
 import os
 import smtplib
 import sys
+import time
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo
@@ -37,6 +38,8 @@ RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", GMAIL_USER)
 EMAIL_ENABLED = bool(GMAIL_USER and GMAIL_APP_PASSWORD)
 
 EVENT_MOVE_THRESHOLD_PCT = 5.0  # 등락률이 이 값 이상이면 "이벤트 있었던 종목"으로 보고 뉴스 첨부
+TOP_PICKS_COUNT = 5             # "오늘의 추천" 탭에 보여줄 개수
+FINNHUB_CALL_DELAY_SEC = 1.05   # 무료 티어 분당 60콜 제한을 넘지 않도록 호출 사이 최소 대기
 
 SB_HEADERS = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -88,27 +91,126 @@ def merge_watchlist_and_holdings(watchlist, holdings):
     return list(by_ticker.values())
 
 
-def get_quote(ticker):
+# 2026-08-20 기준 스냅샷 — 나스닥 API 실시간 조회가 실패할 때만 쓰는 비상용 대체 리스트.
+_NASDAQ100_FALLBACK = [
+    "AAPL", "AMAT", "AMGN", "CMCSA", "INTC", "KLAC", "PCAR", "CTAS", "PAYX", "LRCX",
+    "ADSK", "ROST", "MNST", "MSFT", "ADBE", "FAST", "CSCO", "REGN", "IDXX", "VRTX",
+    "ODFL", "QCOM", "GILD", "SNPS", "SBUX", "INTU", "MCHP", "ORLY", "COST", "CPRT",
+    "ASML", "TTWO", "AMZN", "MSTR", "NVDA", "BKNG", "ISRG", "MRVL", "ADI", "AEP",
+    "AMD", "ADP", "CDNS", "CSX", "HON", "MAR", "MU", "XEL", "EXC", "PEP",
+    "ROP", "TER", "TXN", "WDC", "WMT", "AXON", "MDLZ", "NFLX", "STX", "ALNY",
+    "GOOGL", "MPWR", "DXCM", "TMUS", "MELI", "KDP", "NBIS", "AVGO", "FTNT", "TSLA",
+    "NXPI", "FANG", "META", "PANW", "WDAY", "GOOG", "PYPL", "SHOP", "KHC", "LITE",
+    "CCEP", "BKR", "PDD", "CRWD", "DDOG", "RKLB", "PLTR", "ABNB", "DASH", "APP",
+    "CEG", "WBD", "GEHC", "LIN", "ARM", "TRI", "FER", "ALAB", "SNDK", "CRWV",
+    "SPCX", "HONA",
+]
+
+
+def get_nasdaq100_tickers():
+    """나스닥 공식 API에서 실시간으로 현재 나스닥100 구성종목을 가져온다 (키 불필요).
+    실패하면 마지막으로 확인된 스냅샷으로 대체한다 (지수 리밸런싱 반영이 늦을 수 있음)."""
+    try:
+        r = requests.get(
+            "https://api.nasdaq.com/api/quote/list-type/nasdaq100",
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        rows = r.json()["data"]["data"]["rows"]
+        tickers = [row["symbol"] for row in rows if row.get("symbol")]
+        return tickers or _NASDAQ100_FALLBACK
+    except Exception:
+        return _NASDAQ100_FALLBACK
+
+
+def scan_top_picks(exclude_tickers, report_date, limit=TOP_PICKS_COUNT):
+    """관심종목·보유종목이 아닌 나스닥100 종목 중 매수 근접도가 가장 높은 상위 N개를 찾는다.
+    watchlist 종목과 완전히 동일한 계산식(compute_buy_score)을 그대로 적용할 뿐, 별도 로직은 없다."""
+    universe = [t for t in get_nasdaq100_tickers() if t not in exclude_tickers]
+    candidates = []
+    for ticker in universe:
+        try:
+            q = get_quote(ticker)
+            close_price = q.get("c")
+            prev_close = q.get("pc")
+            if not close_price:
+                continue
+            high_52w, low_52w, pe_ratio, peg_ratio = get_metrics(ticker)
+            technical = compute_technical(ticker, q, str(report_date))
+            if not technical:
+                continue
+            score = compute_buy_score(
+                close_price,
+                technical.get("swing_high"),
+                technical.get("swing_low"),
+                technical.get("sma120"),
+                technical.get("sma200"),
+                low_52w,
+                peg_ratio,
+                technical.get("ma_alignment"),
+                technical.get("cross_signal"),
+            )
+            candidates.append(
+                {
+                    "ticker": ticker,
+                    "close_price": close_price,
+                    "change_pct": (close_price - prev_close) / prev_close * 100 if prev_close else None,
+                    "pe_ratio": pe_ratio,
+                    "peg_ratio": peg_ratio,
+                    **score,
+                }
+            )
+        except Exception:
+            continue
+
+    candidates.sort(key=lambda c: c.get("buy_score") if c.get("buy_score") is not None else -1, reverse=True)
+    top = candidates[:limit]
+
+    # 상위 종목만 회사명(한국어 번역)/애널리스트 컨센서스를 추가로 채운다 (호출량 절약).
+    for c in top:
+        try:
+            rating, _, _, _ = get_analyst_data(c["ticker"])
+            c["analyst_rating"] = rating
+        except Exception:
+            c["analyst_rating"] = None
+        try:
+            name_en = _finnhub_get("stock/profile2", {"symbol": c["ticker"]}).json().get("name")
+            c["display_name"] = translate_to_ko(name_en) if name_en else None
+        except Exception:
+            c["display_name"] = None
+
+    return top
+
+
+_last_finnhub_call = 0.0
+
+
+def _finnhub_get(path, params):
+    """무료 티어 분당 60콜 제한을 넘지 않도록 호출 사이 최소 간격을 보장하는 공통 래퍼."""
+    global _last_finnhub_call
+    elapsed = time.time() - _last_finnhub_call
+    if elapsed < FINNHUB_CALL_DELAY_SEC:
+        time.sleep(FINNHUB_CALL_DELAY_SEC - elapsed)
     r = requests.get(
-        "https://finnhub.io/api/v1/quote",
-        params={"symbol": ticker, "token": FINNHUB_API_KEY},
+        f"https://finnhub.io/api/v1/{path}",
+        params={**params, "token": FINNHUB_API_KEY},
         timeout=15,
     )
+    _last_finnhub_call = time.time()
     r.raise_for_status()
-    return r.json()  # c, h, l, o, pc, t
+    return r
+
+
+def get_quote(ticker):
+    return _finnhub_get("quote", {"symbol": ticker}).json()  # c, h, l, o, pc, t
 
 
 def get_metrics(ticker):
     """52주 고가/저가 + PER(TTM) + PEG(성장률 대비 PER, forward 우선 없으면 TTM).
     PEG는 '적정 PER'을 사람이 정하지 않아도 되게 하는 객관적 성장 대비 밸류에이션 지표."""
     try:
-        r = requests.get(
-            "https://finnhub.io/api/v1/stock/metric",
-            params={"symbol": ticker, "metric": "all", "token": FINNHUB_API_KEY},
-            timeout=15,
-        )
-        r.raise_for_status()
-        m = r.json().get("metric", {})
+        m = _finnhub_get("stock/metric", {"symbol": ticker, "metric": "all"}).json().get("metric", {})
         pe = None
         for field in ("peTTM", "peBasicExclExtraTTM", "peExclExtraTTM", "peNormalizedAnnual"):
             if m.get(field):
@@ -124,13 +226,7 @@ def get_analyst_data(ticker):
     """애널리스트 매수/보유/매도 컨센서스와 목표주가(평균/최고/최저)."""
     rating = None
     try:
-        r = requests.get(
-            "https://finnhub.io/api/v1/stock/recommendation",
-            params={"symbol": ticker, "token": FINNHUB_API_KEY},
-            timeout=15,
-        )
-        r.raise_for_status()
-        recs = r.json()
+        recs = _finnhub_get("stock/recommendation", {"symbol": ticker}).json()
         if recs:
             latest = recs[0]
             buy = latest.get("strongBuy", 0) + latest.get("buy", 0)
@@ -142,13 +238,7 @@ def get_analyst_data(ticker):
 
     target_avg = target_high = target_low = None
     try:
-        r = requests.get(
-            "https://finnhub.io/api/v1/stock/price-target",
-            params={"symbol": ticker, "token": FINNHUB_API_KEY},
-            timeout=15,
-        )
-        r.raise_for_status()
-        pt = r.json()
+        pt = _finnhub_get("stock/price-target", {"symbol": ticker}).json()
         target_avg = pt.get("targetMean")
         target_high = pt.get("targetHigh")
         target_low = pt.get("targetLow")
@@ -196,13 +286,7 @@ def get_company_news(ticker, display_name=None, days=3, limit=3):
     try:
         today = datetime.now(ZoneInfo("America/New_York")).date()
         frm = today - timedelta(days=days)
-        r = requests.get(
-            "https://finnhub.io/api/v1/company-news",
-            params={"symbol": ticker, "from": str(frm), "to": str(today), "token": FINNHUB_API_KEY},
-            timeout=15,
-        )
-        r.raise_for_status()
-        articles = r.json() or []
+        articles = _finnhub_get("company-news", {"symbol": ticker, "from": str(frm), "to": str(today)}).json() or []
         articles.sort(key=lambda a: a.get("datetime", 0), reverse=True)
         articles = [a for a in articles if a.get("headline") and _is_relevant_headline(a["headline"], ticker, display_name)]
         return [
@@ -580,6 +664,18 @@ def save_items(report_id, items):
         sb_post("report_items", rows)
 
 
+def save_top_picks(report_id, picks):
+    requests.delete(
+        f"{SUPABASE_URL}/rest/v1/daily_picks",
+        headers=SB_HEADERS,
+        params={"report_id": f"eq.{report_id}"},
+        timeout=30,
+    )
+    rows = [{"report_id": report_id, "rank": i + 1, **p} for i, p in enumerate(picks)]
+    if rows:
+        sb_post("daily_picks", rows)
+
+
 def log_send(report_id, status, detail):
     sb_post("send_log", {"report_id": report_id, "channel": "email", "status": status, "detail": detail})
 
@@ -776,7 +872,12 @@ def main():
 
     report_id = upsert_report(report_date)
     save_items(report_id, items)
-    print(f"리포트 생성 완료: {report_date} ({len(items)}개 종목) - {REPORT_BASE_URL}/report.html?date={report_date}")
+
+    tracked_tickers = {row["ticker"] for row in watchlist}
+    top_picks = scan_top_picks(tracked_tickers, report_date)
+    save_top_picks(report_id, top_picks)
+
+    print(f"리포트 생성 완료: {report_date} ({len(items)}개 종목, 나스닥100 스캔 상위 {len(top_picks)}개) - {REPORT_BASE_URL}/report.html?date={report_date}")
 
     if not EMAIL_ENABLED:
         print("GMAIL_USER/GMAIL_APP_PASSWORD 미설정 - 이메일 발송 없이 종료")

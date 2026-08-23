@@ -80,6 +80,7 @@
   <div class="tabs">
     <button class="tab-btn active" data-tab="tab-holdings">보유종목 리포트</button>
     <button class="tab-btn" data-tab="tab-watchlist">관심종목 리포트</button>
+    <button class="tab-btn" data-tab="tab-picks">오늘의 추천</button>
   </div>
 
   <div id="tab-holdings" class="tab-panel active">
@@ -93,6 +94,15 @@
 
     <h2 style="margin-top:36px;">상세 데이터</h2>
     <div id="content"></div>
+  </div>
+
+  <div id="tab-picks" class="tab-panel">
+    <h2 style="margin-top:24px;">오늘의 추천 — 나스닥100 매수 근접도 상위 5</h2>
+    <p style="color:#888; font-size:0.85em;">
+      관심종목·보유종목을 제외한 나스닥100 구성종목 전체를 같은 매수 근접도 계산식으로 스캔한 결과입니다.
+      투자 조언이 아닌 기계적 스크리닝 결과이며, 최종 판단은 본인 몫입니다.
+    </p>
+    <div id="picks"></div>
   </div>
 
   <div class="nav">
@@ -128,7 +138,11 @@
       "analyst_rating", "target_price_avg", "target_price_high", "target_price_low",
       "thesis", "news", "quantity", "avg_buy_price", "pnl_pct", "pnl_abs", "note",
     ].join(",");
-    const endpoint = `${url}/rest/v1/daily_reports?report_date=eq.${date}&select=id,report_date,summary,report_items(${fields})`;
+    const pickFields = [
+      "rank", "ticker", "display_name", "close_price", "change_pct", "pe_ratio", "peg_ratio",
+      "buy_score", "buy_score_label", "buy_score_detail", "nearest_support", "nearest_support_label", "analyst_rating",
+    ].join(",");
+    const endpoint = `${url}/rest/v1/daily_reports?report_date=eq.${date}&select=id,report_date,summary,report_items(${fields}),daily_picks(${pickFields})`;
 
     function scoreBadge(score, label, kind) {
       if (score == null) return "-";
@@ -171,6 +185,42 @@
         if (!items.length) {
           content.innerHTML = '<div class="empty">종목 데이터가 없습니다.</div>';
           return;
+        }
+
+        const picksEl = document.getElementById("picks");
+        const picks = (rows[0].daily_picks || []).sort((a, b) => a.rank - b.rank);
+        if (!picks.length) {
+          picksEl.innerHTML = '<p class="empty" style="padding:16px 0;">아직 스캔 결과가 없습니다.</p>';
+        } else {
+          const pkTable = document.createElement("table");
+          pkTable.innerHTML = `
+            <thead><tr>
+              <th>순위</th><th>종목</th><th>현재가</th><th>등락률</th><th>매수 근접도</th><th>지지선</th><th>PER</th><th>PEG</th><th>애널리스트</th>
+            </tr></thead>
+            <tbody>
+              ${picks
+                .map((p) => {
+                  const pct = p.change_pct;
+                  const cls = pct >= 0 ? "up" : "down";
+                  const sign = pct >= 0 ? "+" : "";
+                  return `<tr>
+                    <td>${p.rank}</td>
+                    <td>${tickerLabel(p)}<div class="detail-cell" style="max-width:220px;">${p.buy_score_detail ?? ""}</div></td>
+                    <td>${p.close_price ?? "-"}</td>
+                    <td class="${cls}">${pct != null ? sign + pct.toFixed(2) + "%" : "-"}</td>
+                    <td>${scoreBadge(p.buy_score, p.buy_score_label, "buy")}</td>
+                    <td>${p.nearest_support ?? "-"}${p.nearest_support_label ? ` <small>(${p.nearest_support_label})</small>` : ""}</td>
+                    <td>${p.pe_ratio != null ? p.pe_ratio.toFixed(1) : "-"}</td>
+                    <td>${p.peg_ratio != null ? p.peg_ratio.toFixed(2) : "-"}</td>
+                    <td>${p.analyst_rating ?? "-"}</td>
+                  </tr>`;
+                })
+                .join("")}
+            </tbody>`;
+          const pkScroller = document.createElement("div");
+          pkScroller.className = "table-scroll";
+          pkScroller.appendChild(pkTable);
+          picksEl.appendChild(pkScroller);
         }
 
         const sorted = [...items].sort((a, b) => (b.buy_score ?? -1) - (a.buy_score ?? -1));

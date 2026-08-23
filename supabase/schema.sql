@@ -139,6 +139,28 @@ create table if not exists send_log (
   sent_at timestamptz not null default now()
 );
 
+-- "오늘의 추천" 탭: 관심종목/보유종목이 아닌 나스닥100 종목 중 매수 근접도 상위 N개.
+-- report_items와 완전히 동일한 compute_buy_score 계산식을 그대로 적용한 결과일 뿐이며
+-- 별도의 판단 로직이나 수동 입력은 없다.
+create table if not exists daily_picks (
+  id bigint generated always as identity primary key,
+  report_id bigint not null references daily_reports(id) on delete cascade,
+  rank int not null,
+  ticker text not null,
+  display_name text,
+  close_price numeric,
+  change_pct numeric,
+  pe_ratio numeric,
+  peg_ratio numeric,
+  buy_score numeric,
+  buy_score_label text,
+  buy_score_detail text,
+  nearest_support numeric,
+  nearest_support_label text,
+  analyst_rating text,
+  created_at timestamptz not null default now()
+);
+
 -- 리포트 페이지(docs/*.html)가 anon key로 읽을 수 있도록 RLS 오픈.
 -- watchlist / holdings 는 로그인(매직링크) 후에만 읽기/쓰기 가능 (아래 정책 참고).
 -- send_log 는 아무 공개 정책도 없어 service role key로만 접근 가능.
@@ -147,6 +169,7 @@ alter table report_items enable row level security;
 alter table watchlist enable row level security;
 alter table holdings enable row level security;
 alter table send_log enable row level security;
+alter table daily_picks enable row level security;
 
 drop policy if exists "public read daily_reports" on daily_reports;
 create policy "public read daily_reports" on daily_reports
@@ -154,6 +177,10 @@ create policy "public read daily_reports" on daily_reports
 
 drop policy if exists "public read report_items" on report_items;
 create policy "public read report_items" on report_items
+  for select using (true);
+
+drop policy if exists "public read daily_picks" on daily_picks;
+create policy "public read daily_picks" on daily_picks
   for select using (true);
 
 -- 관리 앱(docs/manage.html)은 Supabase Auth 매직링크로 로그인한 사용자만 접근.
