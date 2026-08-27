@@ -18,6 +18,7 @@
 """
 
 import os
+import re
 import smtplib
 import sys
 import time
@@ -157,6 +158,7 @@ def scan_top_picks(exclude_tickers, report_date, limit=TOP_PICKS_COUNT):
             )
             candidates.append(
                 {
+                    "market": "US",
                     "ticker": ticker,
                     "close_price": close_price,
                     "change_pct": (close_price - prev_close) / prev_close * 100 if prev_close else None,
@@ -185,6 +187,115 @@ def scan_top_picks(exclude_tickers, report_date, limit=TOP_PICKS_COUNT):
             c["display_name"] = None
 
     return top
+
+
+# 2026-08-27 기준 스냅샷(코스피 시가총액 상위, ETF 제외) — 네이버 실시간 조회가 실패할 때만 쓰는 비상용 대체 리스트.
+_KOSPI100_FALLBACK = {
+    "005930": "삼성전자", "000660": "SK하이닉스", "005935": "삼성전자우", "402340": "SK스퀘어",
+    "009150": "삼성전기", "373220": "LG에너지솔루션", "005380": "현대차", "207940": "삼성바이오로직스",
+    "028260": "삼성물산", "032830": "삼성생명", "105560": "KB금융", "012450": "한화에어로스페이스",
+    "034020": "두산에너빌리티", "055550": "신한지주", "000270": "기아", "329180": "HD현대중공업",
+    "006400": "삼성SDI", "068270": "셀트리온", "034730": "SK", "012330": "현대모비스",
+    "086790": "하나금융지주", "035420": "NAVER", "066570": "LG전자", "010120": "LS ELECTRIC",
+    "000810": "삼성화재", "010130": "고려아연", "267260": "HD현대일렉트릭", "298040": "효성중공업",
+    "042660": "한화오션", "005490": "POSCO홀딩스", "009540": "HD한국조선해양", "316140": "우리금융지주",
+    "015760": "한국전력", "017670": "SK텔레콤", "042700": "한미반도체", "011200": "HMM",
+    "138040": "메리츠금융지주", "006800": "미래에셋증권", "051910": "LG화학", "000150": "두산",
+    "096770": "SK이노베이션", "010140": "삼성중공업", "033780": "KT&G", "018260": "삼성에스디에스",
+    "003550": "LG", "267250": "HD현대", "024110": "기업은행", "003670": "포스코퓨처엠",
+    "278470": "에이피알", "079550": "LIG디펜스앤에어로스페이스", "035720": "카카오", "086280": "현대글로비스",
+    "064350": "현대로템", "010950": "S-Oil", "000720": "현대건설", "272210": "한화시스템",
+    "011070": "LG이노텍", "030200": "KT", "047810": "한국항공우주", "005830": "DB손해보험",
+    "078930": "GS", "003230": "삼양식품", "307950": "현대오토에버", "071050": "한국금융지주",
+    "003490": "대한항공", "323410": "카카오뱅크", "259960": "크래프톤", "443060": "HD현대마린솔루션",
+    "028050": "삼성E&A", "005940": "NH투자증권", "006260": "LS", "047050": "포스코인터내셔널",
+    "180640": "한진칼", "090430": "아모레퍼시픽", "047040": "대우건설", "161390": "한국타이어앤테크놀로지",
+    "007660": "이수페타시스", "016360": "삼성증권", "352820": "하이브", "009830": "한화솔루션",
+    "039490": "키움증권", "064400": "LG씨엔에스", "005387": "현대차2우B", "021240": "코웨이",
+    "326030": "SK바이오팜", "000880": "한화", "267270": "HD건설기계", "000100": "유한양행",
+    "128940": "한미약품",
+}
+
+_KR_ETF_NAME_MARKERS = (
+    "KODEX", "TIGER", "KBSTAR", "ARIRANG", "SOL", "ACE", "HANARO", "KOSEF", "KINDEX", "TIMEFOLIO", "WOORI", "파워", "마이다스",
+)
+
+
+def get_kospi100_tickers():
+    """네이버 금융 코스피 시가총액 순위 1~2페이지(상위 약 100개)를 실시간으로 가져온다 (키 불필요).
+    ETF는 이름 패턴으로 걸러내 개별 종목만 남긴다. 실패하면 마지막 확인된 스냅샷으로 대체.
+    반환값은 {6자리 종목코드: 한글 종목명} 딕셔너리."""
+    try:
+        rows = {}
+        for page in (1, 2):
+            r = requests.get(
+                "https://finance.naver.com/sise/sise_market_sum.naver",
+                headers={"User-Agent": "Mozilla/5.0"},
+                params={"sosok": 0, "page": page},
+                timeout=15,
+            )
+            r.raise_for_status()
+            r.encoding = "euc-kr"
+            for code, name in re.findall(r'/item/main\.naver\?code=(\d{6})[^>]*>([^<]+)</a>', r.text):
+                rows[code] = name
+        rows = {c: n for c, n in rows.items() if not any(m in n.upper() for m in _KR_ETF_NAME_MARKERS)}
+        return rows or _KOSPI100_FALLBACK
+    except Exception:
+        return _KOSPI100_FALLBACK
+
+
+def scan_kr_top_picks(exclude_tickers, report_date, limit=TOP_PICKS_COUNT):
+    """코스피 시가총액 상위 종목(KODEX 100류 대형주 풀) 중 매수 근접도가 가장 높은 상위 N개를 찾는다.
+    Finnhub가 한국 시장 시세를 무료 플랜에서 지원하지 않아(quote/metric 모두 빈 값), 이 스캔은
+    Yahoo Finance 데이터만으로 compute_buy_score를 그대로 적용한다 — PEG는 구할 수 없어 중립 처리되고,
+    나머지(지지선/눌림목/추세)는 미국 종목과 완전히 동일한 계산식이다."""
+    universe = {code: name for code, name in get_kospi100_tickers().items() if code not in exclude_tickers}
+    candidates = []
+    for code, name in universe.items():
+        ticker = f"{code}.KS"
+        try:
+            meta, history = get_yahoo_chart(ticker)
+            if not history or len(history) < 2:
+                continue
+            close_price = meta.get("regularMarketPrice") or history[-1]["close"]
+            prev_close = history[-2]["close"]
+            high_52w = meta.get("fiftyTwoWeekHigh")
+            low_52w = meta.get("fiftyTwoWeekLow")
+            quote_like = {"c": close_price, "h": meta.get("regularMarketDayHigh"), "l": meta.get("regularMarketDayLow")}
+            technical = compute_technical(ticker, quote_like, str(report_date), history=history)
+            if not technical:
+                continue
+            if technical.get("ma_alignment") == "역배열(하락추세)":
+                continue
+            score = compute_buy_score(
+                close_price,
+                technical.get("swing_high"),
+                technical.get("swing_low"),
+                technical.get("sma120"),
+                technical.get("sma200"),
+                low_52w,
+                None,  # PEG 데이터 없음 -> 중립 처리(compute_buy_score가 알아서 처리)
+                technical.get("ma_alignment"),
+                technical.get("cross_signal"),
+            )
+            candidates.append(
+                {
+                    "market": "KR",
+                    "ticker": ticker,
+                    "display_name": name,
+                    "close_price": close_price,
+                    "change_pct": (close_price - prev_close) / prev_close * 100 if prev_close else None,
+                    "pe_ratio": None,
+                    "peg_ratio": None,
+                    "analyst_rating": None,
+                    **score,
+                }
+            )
+        except Exception:
+            continue
+
+    candidates.sort(key=lambda c: c.get("buy_score") if c.get("buy_score") is not None else -1, reverse=True)
+    return candidates[:limit]
 
 
 _last_finnhub_call = 0.0
@@ -309,9 +420,9 @@ def get_company_news(ticker, display_name=None, days=3, limit=3):
         return []
 
 
-def get_price_history(ticker, days=260):
-    """Yahoo Finance 차트 API에서 일봉 OHLC 히스토리를 가져온다 (키 불필요, 무료).
-    [{"date", "close", "high", "low"}, ...] 오름차순. (Stooq는 봇 차단 챌린지가 걸려 있어 사용 불가)"""
+def get_yahoo_chart(ticker, days=260):
+    """Yahoo Finance 차트 API를 한 번 호출해서 meta(현재가/52주 고저 등)와 일봉 히스토리를 같이 가져온다
+    (키 불필요, 무료). 한국 주식처럼 Finnhub가 커버하지 않는 시장도 이걸로 충당한다."""
     try:
         r = requests.get(
             f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
@@ -321,6 +432,7 @@ def get_price_history(ticker, days=260):
         )
         r.raise_for_status()
         result = r.json()["chart"]["result"][0]
+        meta = result.get("meta", {})
         timestamps = result["timestamp"]
         q = result["indicators"]["quote"][0]
         closes, highs, lows = q["close"], q["high"], q["low"]
@@ -332,9 +444,14 @@ def get_price_history(ticker, days=260):
             history.append(
                 {"date": date_str, "close": float(c), "high": float(h if h is not None else c), "low": float(l if l is not None else c)}
             )
-        return history[-days:]
+        return meta, history[-days:]
     except Exception:
-        return []
+        return {}, []
+
+
+def get_price_history(ticker, days=260):
+    """[{"date", "close", "high", "low"}, ...] 오름차순. (Stooq는 봇 차단 챌린지가 걸려 있어 사용 불가)"""
+    return get_yahoo_chart(ticker, days)[1]
 
 
 def _find_recent_swing(history, window=5):
@@ -380,9 +497,11 @@ def _find_recent_cross(closes, short_w, long_w, lookback=10):
     return last_event
 
 
-def compute_technical(ticker, latest_quote, latest_date):
-    """20/60/120/200일 SMA, 정배열/역배열, 최근 골든/데드크로스, 직전 스윙 고점/저점을 계산한다."""
-    history = get_price_history(ticker)
+def compute_technical(ticker, latest_quote, latest_date, history=None):
+    """20/60/120/200일 SMA, 정배열/역배열, 최근 골든/데드크로스, 직전 스윙 고점/저점을 계산한다.
+    history를 미리 받으면(예: get_yahoo_chart로 한 번에 가져온 경우) 중복 API 호출을 피한다."""
+    if history is None:
+        history = get_price_history(ticker)
     if not history:
         return {}
 
@@ -668,11 +787,12 @@ def save_items(report_id, items):
         sb_post("report_items", rows)
 
 
-def save_top_picks(report_id, picks):
+def save_top_picks(report_id, picks, market):
+    # market별로만 삭제 — US/KR 두 스캔이 같은 daily_picks 테이블을 나눠 쓰므로 서로를 지우면 안 된다.
     requests.delete(
         f"{SUPABASE_URL}/rest/v1/daily_picks",
         headers=SB_HEADERS,
-        params={"report_id": f"eq.{report_id}"},
+        params={"report_id": f"eq.{report_id}", "market": f"eq.{market}"},
         timeout=30,
     )
     rows = [{"report_id": report_id, "rank": i + 1, **p} for i, p in enumerate(picks)]
@@ -879,9 +999,15 @@ def main():
 
     tracked_tickers = {row["ticker"] for row in watchlist}
     top_picks = scan_top_picks(tracked_tickers, report_date)
-    save_top_picks(report_id, top_picks)
+    save_top_picks(report_id, top_picks, "US")
 
-    print(f"리포트 생성 완료: {report_date} ({len(items)}개 종목, 나스닥100 스캔 상위 {len(top_picks)}개) - {REPORT_BASE_URL}/report.html?date={report_date}")
+    kr_top_picks = scan_kr_top_picks(set(), report_date)
+    save_top_picks(report_id, kr_top_picks, "KR")
+
+    print(
+        f"리포트 생성 완료: {report_date} ({len(items)}개 종목, 나스닥100 스캔 상위 {len(top_picks)}개, "
+        f"코스피 스캔 상위 {len(kr_top_picks)}개) - {REPORT_BASE_URL}/report.html?date={report_date}"
+    )
 
     if not EMAIL_ENABLED:
         print("GMAIL_USER/GMAIL_APP_PASSWORD 미설정 - 이메일 발송 없이 종료")

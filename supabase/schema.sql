@@ -145,13 +145,14 @@ create table if not exists send_log (
 create table if not exists daily_picks (
   id bigint generated always as identity primary key,
   report_id bigint not null references daily_reports(id) on delete cascade,
+  market text not null default 'US',  -- 'US'(나스닥100) / 'KR'(코스피 시가총액 상위, ETF 제외)
   rank int not null,
   ticker text not null,
   display_name text,
   close_price numeric,
   change_pct numeric,
   pe_ratio numeric,
-  peg_ratio numeric,
+  peg_ratio numeric,   -- KR은 Finnhub 무료플랜이 한국 시장을 지원하지 않아 항상 null (중립 처리됨)
   buy_score numeric,
   buy_score_label text,
   buy_score_detail text,
@@ -160,6 +161,8 @@ create table if not exists daily_picks (
   analyst_rating text,
   created_at timestamptz not null default now()
 );
+
+alter table daily_picks add column if not exists market text not null default 'US';
 
 -- 리포트 페이지(docs/*.html)가 anon key로 읽을 수 있도록 RLS 오픈.
 -- watchlist / holdings 는 로그인(매직링크) 후에만 읽기/쓰기 가능 (아래 정책 참고).

@@ -80,7 +80,8 @@
   <div class="tabs">
     <button class="tab-btn active" data-tab="tab-holdings">보유종목 리포트</button>
     <button class="tab-btn" data-tab="tab-watchlist">관심종목 리포트</button>
-    <button class="tab-btn" data-tab="tab-picks">오늘의 추천</button>
+    <button class="tab-btn" data-tab="tab-picks">미국 추천</button>
+    <button class="tab-btn" data-tab="tab-picks-kr">국내 추천</button>
   </div>
 
   <div id="tab-holdings" class="tab-panel active">
@@ -103,6 +104,16 @@
       대세 하락추세(역배열)인 종목은 후보에서 제외됩니다. 투자 조언이 아닌 기계적 스크리닝 결과이며, 최종 판단은 본인 몫입니다.
     </p>
     <div id="picks"></div>
+  </div>
+
+  <div id="tab-picks-kr" class="tab-panel">
+    <h2 style="margin-top:24px;">오늘의 추천 — 코스피 시가총액 상위 매수 근접도 5</h2>
+    <p style="color:#888; font-size:0.85em;">
+      코스피 시가총액 상위 종목(ETF 제외, KODEX 100류 대형주 풀)을 같은 매수 근접도 계산식으로 스캔한 결과입니다.
+      Finnhub가 한국 시장을 지원하지 않아 PEG는 중립 처리되고 나머지(지지선·눌림목·추세)는 미국과 동일합니다.
+      대세 하락추세인 종목은 제외됩니다. 투자 조언이 아닌 기계적 스크리닝 결과입니다.
+    </p>
+    <div id="picks-kr"></div>
   </div>
 
   <div class="nav">
@@ -139,7 +150,7 @@
       "thesis", "news", "quantity", "avg_buy_price", "pnl_pct", "pnl_abs", "note",
     ].join(",");
     const pickFields = [
-      "rank", "ticker", "display_name", "close_price", "change_pct", "pe_ratio", "peg_ratio",
+      "market", "rank", "ticker", "display_name", "close_price", "change_pct", "pe_ratio", "peg_ratio",
       "buy_score", "buy_score_label", "buy_score_detail", "nearest_support", "nearest_support_label", "analyst_rating",
     ].join(",");
     const endpoint = `${url}/rest/v1/daily_reports?report_date=eq.${date}&select=id,report_date,summary,report_items(${fields}),daily_picks(${pickFields})`;
@@ -156,8 +167,9 @@
     }
 
     function tickerLabel(it) {
+      const displayTicker = it.ticker.endsWith(".KS") ? it.ticker.slice(0, -3) : it.ticker;
       const nameHtml = it.display_name ? ` <small style="color:#888; font-weight:400;">${it.display_name}</small>` : "";
-      return `<button type="button" class="ticker-link" data-ticker="${it.ticker}" data-name="${it.display_name ?? ""}">${it.ticker}</button>${nameHtml}`;
+      return `<button type="button" class="ticker-link" data-ticker="${it.ticker}" data-name="${it.display_name ?? ""}">${displayTicker}</button>${nameHtml}`;
     }
 
     function newsList(news) {
@@ -187,11 +199,12 @@
           return;
         }
 
-        const picksEl = document.getElementById("picks");
-        const picks = (rows[0].daily_picks || []).sort((a, b) => a.rank - b.rank);
-        if (!picks.length) {
-          picksEl.innerHTML = '<p class="empty" style="padding:16px 0;">아직 스캔 결과가 없습니다.</p>';
-        } else {
+        function renderPicksTable(containerId, picks) {
+          const el = document.getElementById(containerId);
+          if (!picks.length) {
+            el.innerHTML = '<p class="empty" style="padding:16px 0;">아직 스캔 결과가 없습니다.</p>';
+            return;
+          }
           const pkTable = document.createElement("table");
           pkTable.innerHTML = `
             <thead><tr>
@@ -220,8 +233,12 @@
           const pkScroller = document.createElement("div");
           pkScroller.className = "table-scroll";
           pkScroller.appendChild(pkTable);
-          picksEl.appendChild(pkScroller);
+          el.appendChild(pkScroller);
         }
+
+        const allPicks = (rows[0].daily_picks || []).sort((a, b) => a.rank - b.rank);
+        renderPicksTable("picks", allPicks.filter((p) => (p.market ?? "US") === "US"));
+        renderPicksTable("picks-kr", allPicks.filter((p) => p.market === "KR"));
 
         const sorted = [...items].sort((a, b) => (b.buy_score ?? -1) - (a.buy_score ?? -1));
 
@@ -399,9 +416,16 @@
     const chartTitle = document.getElementById("chartTitle");
     const chartContainer = document.getElementById("chartContainer");
 
+    function resolveTvSymbol(ticker) {
+      if (TICKER_SYMBOL_MAP[ticker]) return TICKER_SYMBOL_MAP[ticker];
+      if (ticker.endsWith(".KS")) return `KRX:${ticker.slice(0, -3)}`; // 한국 코스피 종목: Yahoo 표기 -> TradingView 표기
+      return ticker;
+    }
+
     function openChart(ticker, name) {
-      const symbol = TICKER_SYMBOL_MAP[ticker] || ticker;
-      chartTitle.textContent = name ? `${ticker} · ${name}` : ticker;
+      const symbol = resolveTvSymbol(ticker);
+      const displayTicker = ticker.endsWith(".KS") ? ticker.slice(0, -3) : ticker;
+      chartTitle.textContent = name ? `${displayTicker} · ${name}` : displayTicker;
       chartContainer.innerHTML = "";
       chartModal.classList.add("open");
       const isDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
