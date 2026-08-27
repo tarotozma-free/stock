@@ -217,7 +217,6 @@
     }
 
     function load(days) {
-      document.getElementById("rangeLabel").textContent = days;
       const cutoff = new Date();
       cutoff.setDate(cutoff.getDate() - days);
       const cutoffStr = cutoff.toISOString().slice(0, 10);
