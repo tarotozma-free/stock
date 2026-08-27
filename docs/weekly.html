@@ -63,6 +63,12 @@
       <option value="365">최근 1년</option>
     </select>
   </div>
+  <p id="snapshotNote" class="sub" style="display:none;"></p>
+
+  <div style="margin-top:14px;">
+    <label style="font-size:0.85rem; color:#888;">저장된 토요일 스냅샷:</label>
+    <span id="snapshotList" style="font-size:0.85rem;"></span>
+  </div>
 
   <div id="summary" class="summary-cards"></div>
 
@@ -216,7 +222,7 @@
       el.innerHTML = cards.map((c) => `<div class="card"><div class="label">${c.label}</div><div class="value">${c.value}</div></div>`).join("");
     }
 
-    function load(days) {
+    function loadLive(days) {
       const cutoff = new Date();
       cutoff.setDate(cutoff.getDate() - days);
       const cutoffStr = cutoff.toISOString().slice(0, 10);
@@ -277,8 +283,82 @@
         });
     }
 
-    document.getElementById("rangeSelect").addEventListener("change", (e) => load(Number(e.target.value)));
-    load(14);
+    // 저장된 스냅샷(매주 토요일 자동 생성)을 그때 그대로 다시 보여준다 — 라이브 계산이 아니라 DB에 박제된 값.
+    function resultHtmlFor(kind, result) {
+      if (result === "watching") return '<span class="watching">관찰중</span>';
+      if (result === "hit") return kind === "buy" ? '<span class="hit">✅ 적중</span>' : '<span class="hit">✅ 적중(하락)</span>';
+      return kind === "buy" ? '<span class="miss">❌ 빗나감</span>' : '<span class="miss">❌ 빗나감(상승)</span>';
+    }
+
+    function loadSnapshot(dateStr) {
+      const endpoint = `${url}/rest/v1/weekly_reviews?review_date=eq.${dateStr}&select=*,weekly_review_items(*)`;
+      fetch(endpoint, { headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` } })
+        .then((r) => r.json())
+        .then((rows) => {
+          if (!rows.length) {
+            document.getElementById("buyReview").innerHTML = '<div class="empty">해당 날짜의 스냅샷이 없습니다.</div>';
+            document.getElementById("sellReview").innerHTML = "";
+            document.getElementById("summary").innerHTML = "";
+            return;
+          }
+          const review = rows[0];
+          const note = document.getElementById("snapshotNote");
+          note.style.display = "block";
+          note.textContent = `${review.review_date}에 저장된 스냅샷 (지난 ${review.window_days}일 기준, 이후 라이브로 갱신되지 않음)`;
+          document.getElementById("rangeSelect").parentElement.style.display = "none";
+
+          const toRow = (it) => ({
+            ticker: it.ticker,
+            display_name: it.display_name,
+            source: it.source,
+            entryDate: it.entry_date,
+            entryPrice: it.entry_price,
+            latestDate: it.latest_date,
+            latestPrice: it.latest_price,
+            pct: it.actual_pct,
+            expectedPct: it.expected_pct,
+            sameDay: it.same_day,
+            resultHtml: resultHtmlFor(it.kind, it.result),
+          });
+          const items = review.weekly_review_items || [];
+          const buyRows = items.filter((it) => it.kind === "buy").map(toRow);
+          const sellRows = items.filter((it) => it.kind === "sell").map(toRow);
+
+          document.getElementById("buyReview").innerHTML = "";
+          document.getElementById("sellReview").innerHTML = "";
+          renderTable("buyReview", buyRows, "buy");
+          renderTable("sellReview", sellRows, "sell");
+          renderSummary(buyRows, sellRows);
+        })
+        .catch((e) => {
+          document.getElementById("buyReview").innerHTML = `<div class="empty">불러오기 실패: ${e}</div>`;
+        });
+    }
+
+    function loadSnapshotList() {
+      const endpoint = `${url}/rest/v1/weekly_reviews?select=review_date&order=review_date.desc&limit=20`;
+      fetch(endpoint, { headers: { apikey: anonKey, Authorization: `Bearer ${anonKey}` } })
+        .then((r) => r.json())
+        .then((rows) => {
+          const el = document.getElementById("snapshotList");
+          if (!rows.length) {
+            el.innerHTML = '<span style="color:#888;">아직 없음 (매주 토요일 자동 생성)</span>';
+            return;
+          }
+          el.innerHTML = rows.map((r) => `<a href="weekly.html?date=${r.review_date}">${r.review_date}</a>`).join(" · ");
+        })
+        .catch(() => {});
+    }
+
+    const params = new URLSearchParams(location.search);
+    const snapshotDate = params.get("date");
+    loadSnapshotList();
+    if (snapshotDate) {
+      loadSnapshot(snapshotDate);
+    } else {
+      document.getElementById("rangeSelect").addEventListener("change", (e) => loadLive(Number(e.target.value)));
+      loadLive(14);
+    }
 
     // ---------- 종목 클릭 시 차트 모달 (report.html과 동일) ----------
     let tvScriptLoaded = false;

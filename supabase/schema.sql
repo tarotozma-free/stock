@@ -164,6 +164,36 @@ create table if not exists daily_picks (
 
 alter table daily_picks add column if not exists market text not null default 'US';
 
+-- 매주 토요일 스냅샷으로 저장되는 "복기 리포트" — docs/weekly.html의 라이브 계산과 동일한 로직을
+-- 서버에서 재현해서 그 시점 그대로 영구 보존한다 (daily_reports가 매일 스냅샷 되는 것과 같은 개념).
+create table if not exists weekly_reviews (
+  id bigint generated always as identity primary key,
+  review_date date not null unique,  -- 스냅샷을 생성한 날짜(토요일)
+  window_days int not null,          -- 이 스냅샷이 훑은 조회 기간(일)
+  buy_hit int, buy_total int,
+  buy_avg_expected_pct numeric, buy_avg_actual_pct numeric,
+  sell_hit int, sell_total int,
+  sell_avg_expected_pct numeric, sell_avg_actual_pct numeric,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists weekly_review_items (
+  id bigint generated always as identity primary key,
+  review_id bigint not null references weekly_reviews(id) on delete cascade,
+  kind text not null,          -- 'buy' / 'sell'
+  ticker text not null,
+  display_name text,
+  source text,                 -- "관심/보유종목" / "오늘의 추천(미국)" / "오늘의 추천(국내)"
+  entry_date date not null,
+  entry_price numeric,
+  expected_pct numeric,        -- 신호 당시 저항선(매수)/지지선(매도)까지의 거리
+  latest_date date,
+  latest_price numeric,
+  actual_pct numeric,
+  same_day boolean,            -- 신호일=최신일이라 아직 결과 판단 불가("관찰중")
+  result text                  -- 'hit' / 'miss' / 'watching'
+);
+
 -- 리포트 페이지(docs/*.html)가 anon key로 읽을 수 있도록 RLS 오픈.
 -- watchlist / holdings 는 로그인(매직링크) 후에만 읽기/쓰기 가능 (아래 정책 참고).
 -- send_log 는 아무 공개 정책도 없어 service role key로만 접근 가능.
@@ -173,6 +203,16 @@ alter table watchlist enable row level security;
 alter table holdings enable row level security;
 alter table send_log enable row level security;
 alter table daily_picks enable row level security;
+alter table weekly_reviews enable row level security;
+alter table weekly_review_items enable row level security;
+
+drop policy if exists "public read weekly_reviews" on weekly_reviews;
+create policy "public read weekly_reviews" on weekly_reviews
+  for select using (true);
+
+drop policy if exists "public read weekly_review_items" on weekly_review_items;
+create policy "public read weekly_review_items" on weekly_review_items
+  for select using (true);
 
 drop policy if exists "public read daily_reports" on daily_reports;
 create policy "public read daily_reports" on daily_reports

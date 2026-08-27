@@ -1,0 +1,28 @@
+name: Weekly Signal Review
+
+on:
+  schedule:
+    # 22:20 UTC 금요일 = 07:20 KST 토요일 (그날 일일 리포트가 끝난 뒤 여유 두고 실행)
+    - cron: "20 22 * * 5"
+  workflow_dispatch: {}
+
+jobs:
+  generate-review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Generate weekly review snapshot
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          REPORT_BASE_URL: ${{ secrets.REPORT_BASE_URL }}
+        run: python scripts/generate_report.py --weekly-review

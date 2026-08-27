@@ -1023,5 +1023,156 @@ def main():
         raise
 
 
+STRONG_SIGNAL_THRESHOLD = 65  # docs/weekly.html과 동일한 "강한 신호" 기준
+WEEKLY_REVIEW_WINDOW_DAYS = 7  # 매주 토요일 스냅샷이 훑는 조회 기간(일)
+
+
+def _find_first_crossings(timeline, score_key, threshold=STRONG_SIGNAL_THRESHOLD):
+    """시간순(과거->최신) 스냅샷 배열에서 score가 임계값을 처음 넘긴 지점들을 찾는다.
+    docs/weekly.html의 동명 JS 함수와 완전히 동일한 로직이다."""
+    events = []
+    was_above = False
+    for snap in timeline:
+        score = snap.get(score_key)
+        is_above = score is not None and score >= threshold
+        if is_above and not was_above:
+            events.append(snap)
+        was_above = is_above
+    return events
+
+
+def _build_review_rows(events, timelines, kind):
+    rows = []
+    for ev in events:
+        timeline = timelines[ev["_key"]]
+        latest = timeline[-1]
+        entry_price = ev.get("close_price")
+        latest_price = latest.get("close_price")
+        actual_pct = (latest_price - entry_price) / entry_price * 100 if entry_price and latest_price else None
+        same_day = ev["date"] == latest["date"]
+        # "예상"은 신호 당일 이미 계산돼있던 저항선(매수)/지지선(매도)까지의 거리 — 새로 만든 예측이 아니라
+        # 그날 점수 계산에 쓰인 기술적 근거를 그대로 노출한 것.
+        target_level = ev.get("nearest_resistance") if kind == "buy" else ev.get("nearest_support")
+        expected_pct = (target_level - entry_price) / entry_price * 100 if entry_price and target_level else None
+        if same_day or actual_pct is None:
+            result = "watching"
+        elif kind == "buy":
+            result = "hit" if actual_pct > 0 else "miss"
+        else:
+            result = "hit" if actual_pct < 0 else "miss"
+        rows.append(
+            {
+                "kind": kind,
+                "ticker": ev["ticker"],
+                "display_name": ev.get("display_name"),
+                "source": ev["_source"],
+                "entry_date": ev["date"],
+                "entry_price": entry_price,
+                "expected_pct": round(expected_pct, 2) if expected_pct is not None else None,
+                "latest_date": latest["date"],
+                "latest_price": latest_price,
+                "actual_pct": round(actual_pct, 2) if actual_pct is not None else None,
+                "same_day": same_day,
+                "result": result,
+            }
+        )
+    return rows
+
+
+def generate_weekly_review(window_days=WEEKLY_REVIEW_WINDOW_DAYS):
+    """docs/weekly.html의 라이브 계산과 동일한 로직을 서버에서 재현해서, 그 시점(주로 토요일)
+    스냅샷을 weekly_reviews/weekly_review_items에 영구 저장한다 (daily_reports가 매일 스냅샷 되는 것과 같은 개념)."""
+    review_date = datetime.now(ZoneInfo("Asia/Seoul")).date()
+    cutoff = (review_date - timedelta(days=window_days)).isoformat()
+
+    fields = "ticker,display_name,buy_score,sell_score,close_price,nearest_support,nearest_resistance"
+    pick_fields = "market,ticker,display_name,buy_score,close_price"
+    reports = sb_get(
+        "daily_reports",
+        params={
+            "report_date": f"gte.{cutoff}",
+            "select": f"report_date,report_items({fields}),daily_picks({pick_fields})",
+            "order": "report_date.asc",
+        },
+    )
+
+    wl_timeline = {}
+    pick_timeline = {}
+    for day in reports:
+        for it in day.get("report_items") or []:
+            wl_timeline.setdefault(it["ticker"], []).append({"date": day["report_date"], **it})
+        for p in day.get("daily_picks") or []:
+            key = f"{p['market']}:{p['ticker']}"
+            pick_timeline.setdefault(key, []).append({"date": day["report_date"], **p})
+
+    buy_events = []
+    for key, timeline in wl_timeline.items():
+        for ev in _find_first_crossings(timeline, "buy_score"):
+            buy_events.append({**ev, "_key": key, "_source": "관심/보유종목"})
+    for key, timeline in pick_timeline.items():
+        for ev in _find_first_crossings(timeline, "buy_score"):
+            source = "오늘의 추천(국내)" if ev.get("market") == "KR" else "오늘의 추천(미국)"
+            buy_events.append({**ev, "_key": key, "_source": source})
+
+    sell_events = []
+    for key, timeline in wl_timeline.items():
+        for ev in _find_first_crossings(timeline, "sell_score"):
+            sell_events.append({**ev, "_key": key, "_source": "관심/보유종목"})
+
+    all_timelines = {**wl_timeline, **pick_timeline}
+    buy_rows = _build_review_rows(buy_events, all_timelines, "buy")
+    sell_rows = _build_review_rows(sell_events, all_timelines, "sell")
+
+    def _stats(rows):
+        decided = [r for r in rows if not r["same_day"] and r["actual_pct"] is not None]
+        if not decided:
+            return 0, 0, None, None
+        hit_ok = lambda r: r["actual_pct"] > 0 if r["kind"] == "buy" else r["actual_pct"] < 0
+        hits = sum(1 for r in decided if hit_ok(r))
+        exp_vals = [r["expected_pct"] for r in decided if r["expected_pct"] is not None]
+        avg_expected = sum(exp_vals) / len(exp_vals) if exp_vals else None
+        avg_actual = sum(r["actual_pct"] for r in decided) / len(decided)
+        return len(decided), hits, avg_expected, avg_actual
+
+    buy_total, buy_hit, buy_avg_exp, buy_avg_act = _stats(buy_rows)
+    sell_total, sell_hit, sell_avg_exp, sell_avg_act = _stats(sell_rows)
+
+    # 재실행 대비: 같은 review_date 스냅샷이 있으면 지우고 새로 저장(연쇄삭제로 items도 같이 지워짐).
+    existing = sb_get("weekly_reviews", params={"review_date": f"eq.{review_date}", "select": "id"})
+    if existing:
+        requests.delete(
+            f"{SUPABASE_URL}/rest/v1/weekly_reviews",
+            headers=SB_HEADERS,
+            params={"id": f"eq.{existing[0]['id']}"},
+            timeout=30,
+        )
+
+    created = sb_post(
+        "weekly_reviews",
+        {
+            "review_date": str(review_date),
+            "window_days": window_days,
+            "buy_hit": buy_hit,
+            "buy_total": buy_total,
+            "buy_avg_expected_pct": round(buy_avg_exp, 2) if buy_avg_exp is not None else None,
+            "buy_avg_actual_pct": round(buy_avg_act, 2) if buy_avg_act is not None else None,
+            "sell_hit": sell_hit,
+            "sell_total": sell_total,
+            "sell_avg_expected_pct": round(sell_avg_exp, 2) if sell_avg_exp is not None else None,
+            "sell_avg_actual_pct": round(sell_avg_act, 2) if sell_avg_act is not None else None,
+        },
+    )
+    review_id = created[0]["id"]
+
+    item_rows = [{"review_id": review_id, **r} for r in (buy_rows + sell_rows)]
+    if item_rows:
+        sb_post("weekly_review_items", item_rows)
+
+    print(f"주간 복기 스냅샷 저장 완료: {review_date} (매수 {buy_total}건, 매도 {sell_total}건)")
+
+
 if __name__ == "__main__":
-    main()
+    if "--weekly-review" in sys.argv:
+        generate_weekly_review()
+    else:
+        main()
