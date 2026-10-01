@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Generate weekly review snapshot
+      - name: Generate weekly review snapshot + volume surge scan
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

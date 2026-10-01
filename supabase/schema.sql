@@ -194,6 +194,21 @@ create table if not exists weekly_review_items (
   result text                  -- 'hit' / 'miss' / 'watching'
 );
 
+-- "거래량 급증" 탭: 나스닥100 중 최근 1개월 평균거래량이 그 이전 대비 3배 이상 늘었는데
+-- 주가는 3% 이하로만 움직인(조용히 매집되는 듯한) 종목. 매주 1회(토요일 복기와 같은 주기)만 갱신.
+create table if not exists volume_surge_picks (
+  id bigint generated always as identity primary key,
+  scan_date date not null,
+  ticker text not null,
+  display_name text,
+  close_price numeric,
+  change_pct_1m numeric,
+  volume_ratio numeric,
+  avg_volume_recent numeric,
+  avg_volume_prior numeric,
+  created_at timestamptz not null default now()
+);
+
 -- 리포트 페이지(docs/*.html)가 anon key로 읽을 수 있도록 RLS 오픈.
 -- watchlist / holdings 는 로그인(매직링크) 후에만 읽기/쓰기 가능 (아래 정책 참고).
 -- send_log 는 아무 공개 정책도 없어 service role key로만 접근 가능.
@@ -205,6 +220,7 @@ alter table send_log enable row level security;
 alter table daily_picks enable row level security;
 alter table weekly_reviews enable row level security;
 alter table weekly_review_items enable row level security;
+alter table volume_surge_picks enable row level security;
 
 drop policy if exists "public read weekly_reviews" on weekly_reviews;
 create policy "public read weekly_reviews" on weekly_reviews
@@ -212,6 +228,10 @@ create policy "public read weekly_reviews" on weekly_reviews
 
 drop policy if exists "public read weekly_review_items" on weekly_review_items;
 create policy "public read weekly_review_items" on weekly_review_items
+  for select using (true);
+
+drop policy if exists "public read volume_surge_picks" on volume_surge_picks;
+create policy "public read volume_surge_picks" on volume_surge_picks
   for select using (true);
 
 drop policy if exists "public read daily_reports" on daily_reports;

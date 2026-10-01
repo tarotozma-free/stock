@@ -298,6 +298,78 @@ def scan_kr_top_picks(exclude_tickers, report_date, limit=TOP_PICKS_COUNT):
     return candidates[:limit]
 
 
+VOLUME_SCAN_WINDOW_DAYS = 21  # 약 1개월치 거래일수
+VOLUME_SCAN_RATIO_THRESHOLD = 3.0  # 최근 1개월 평균거래량이 그 이전 대비 몇 배 이상이어야 하는지
+VOLUME_SCAN_MAX_PRICE_CHANGE_PCT = 3.0  # 같은 기간 주가 변동폭이 이 값 이하여야 함(조용한 매집 패턴)
+
+
+def scan_volume_surge():
+    """나스닥100 종목 중 최근 1개월 평균 거래량이 그 이전 1개월 대비 3배 이상 늘었는데
+    주가는 3% 이하로만 움직인(조용히 매집되는 듯한) 종목을 찾는다. 매일이 아니라 주 1회만 실행해도
+    충분한 스크리너라 토요일 복기 스냅샷과 같은 주기로 돈다. 매수/매도 근접도 점수와는 별개의
+    지표이며, 모든 종목에 동일한 계산식을 적용한다(수동 입력 없음)."""
+    universe = get_nasdaq100_tickers()
+    w = VOLUME_SCAN_WINDOW_DAYS
+    matches = []
+    for ticker in universe:
+        try:
+            _, history = get_yahoo_chart(ticker)
+            if len(history) < w * 2 + 1:
+                continue
+            recent = history[-w:]
+            prior = history[-2 * w : -w]
+            vol_recent = [p["volume"] for p in recent if p.get("volume")]
+            vol_prior = [p["volume"] for p in prior if p.get("volume")]
+            if not vol_recent or not vol_prior:
+                continue
+            avg_recent = sum(vol_recent) / len(vol_recent)
+            avg_prior = sum(vol_prior) / len(vol_prior)
+            if not avg_prior:
+                continue
+            volume_ratio = avg_recent / avg_prior
+            price_start = history[-w - 1]["close"]
+            price_now = history[-1]["close"]
+            change_pct = (price_now - price_start) / price_start * 100 if price_start else None
+            if (
+                volume_ratio >= VOLUME_SCAN_RATIO_THRESHOLD
+                and change_pct is not None
+                and change_pct <= VOLUME_SCAN_MAX_PRICE_CHANGE_PCT
+            ):
+                matches.append(
+                    {
+                        "ticker": ticker,
+                        "close_price": price_now,
+                        "change_pct_1m": round(change_pct, 2),
+                        "volume_ratio": round(volume_ratio, 2),
+                        "avg_volume_recent": round(avg_recent, 0),
+                        "avg_volume_prior": round(avg_prior, 0),
+                    }
+                )
+        except Exception:
+            continue
+
+    matches.sort(key=lambda m: m["volume_ratio"], reverse=True)
+    for m in matches:
+        try:
+            name_en = _finnhub_get("stock/profile2", {"symbol": m["ticker"]}).json().get("name")
+            m["display_name"] = translate_to_ko(name_en) if name_en else None
+        except Exception:
+            m["display_name"] = None
+    return matches
+
+
+def save_volume_surge(scan_date, matches):
+    requests.delete(
+        f"{SUPABASE_URL}/rest/v1/volume_surge_picks",
+        headers=SB_HEADERS,
+        params={"scan_date": f"eq.{scan_date}"},
+        timeout=30,
+    )
+    rows = [{"scan_date": str(scan_date), **m} for m in matches]
+    if rows:
+        sb_post("volume_surge_picks", rows)
+
+
 _last_finnhub_call = 0.0
 
 
@@ -435,14 +507,21 @@ def get_yahoo_chart(ticker, days=260):
         meta = result.get("meta", {})
         timestamps = result["timestamp"]
         q = result["indicators"]["quote"][0]
-        closes, highs, lows = q["close"], q["high"], q["low"]
+        closes, highs, lows, volumes = q["close"], q["high"], q["low"], q.get("volume") or []
         history = []
-        for ts, c, h, l in zip(timestamps, closes, highs, lows):
+        for i, (ts, c, h, l) in enumerate(zip(timestamps, closes, highs, lows)):
             if c is None:
                 continue
             date_str = datetime.fromtimestamp(ts, tz=ZoneInfo("America/New_York")).date().isoformat()
+            v = volumes[i] if i < len(volumes) else None
             history.append(
-                {"date": date_str, "close": float(c), "high": float(h if h is not None else c), "low": float(l if l is not None else c)}
+                {
+                    "date": date_str,
+                    "close": float(c),
+                    "high": float(h if h is not None else c),
+                    "low": float(l if l is not None else c),
+                    "volume": float(v) if v is not None else None,
+                }
             )
         return meta, history[-days:]
     except Exception:
@@ -1174,5 +1253,8 @@ def generate_weekly_review(window_days=WEEKLY_REVIEW_WINDOW_DAYS):
 if __name__ == "__main__":
     if "--weekly-review" in sys.argv:
         generate_weekly_review()
+        vs_matches = scan_volume_surge()
+        save_volume_surge(datetime.now(ZoneInfo("Asia/Seoul")).date(), vs_matches)
+        print(f"거래량 급증 스캔 완료: {len(vs_matches)}건")
     else:
         main()
