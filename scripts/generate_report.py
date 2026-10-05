@@ -302,15 +302,17 @@ def scan_kr_top_picks(exclude_tickers, report_date, limit=TOP_PICKS_COUNT):
 VOLUME_SCAN_RECENT_DAYS = 5  # 급증 여부를 보는 최근 구간(거래일)
 VOLUME_SCAN_BASELINE_DAYS = 21  # 평소 거래량 기준선: 최근 구간 바로 앞 약 1개월(거래일)
 VOLUME_SCAN_RATIO_THRESHOLD = 3.0  # 최근 구간 중 하루 최대 거래량이 평소 일평균의 몇 배 이상이어야 하는지
-VOLUME_SCAN_MAX_PRICE_CHANGE_PCT = 3.0  # 같은 구간 주가 상승폭이 이 값 이하여야 함(이미 급등한 종목 제외)
+VOLUME_SCAN_PRICE_BAND_PCT = 3.0  # 급증 구간(5일) 주가 변동이 ±이 값 이내여야 함(투매 급락/이미 급등 중인 종목 제외)
+VOLUME_SCAN_MAX_MONTH_RISE_PCT = 3.0  # 최근 1개월(21거래일) 주가 상승이 이 값 이하여야 함(아직 급등 전)
 
 
 def scan_volume_surge():
-    """나스닥100 종목 중 최근 5거래일 안에 하루 거래량이 직전 한 달 일평균의 3배 이상으로 터졌는데,
-    같은 5일간 주가 상승폭은 3% 이하인(아직 안 오른) 종목을 찾는다.
-    5일 *평균*이 3배가 되려면 인수합병급 이벤트가 아니면 사실상 불가능해서(대형주 기준 실측: 2배 이상도 0개)
-    "하루 최대치"로 급증을 잡는다. 하락 종목도 상승폭 조건엔 걸리므로 화면에서 5일 변동률로 횡보/하락을 구분한다.
-    주 1회(토요일 복기 스냅샷과 같은 주기)만 돌고, 모든 종목에 동일한 계산식을 적용한다(수동 입력 없음)."""
+    """"거래량은 터지는데 가격은 아직 급등 전"인 매집 구간 후보를 찾는다. 나스닥100 중 최근 5거래일 안에
+    하루 거래량이 직전 한 달 일평균의 3배 이상으로 터졌고, 그 5일간 주가가 ±3% 이내(횡보)이며,
+    최근 한 달 상승폭도 3% 이하인 종목. 급락을 동반한 거래량 폭증(투매)과 이미 오른 종목은 제외한다.
+    5일 *평균*이 3배가 되려면 인수합병급 이벤트가 아니면 사실상 불가능해서(대형주 실측: 2배 이상도 0개)
+    "하루 최대치"로 급증을 잡는다. 주 1회(토요일 복기 스냅샷과 같은 주기)만 돌고,
+    모든 종목에 동일한 계산식을 적용한다(수동 입력 없음)."""
     universe = get_nasdaq100_tickers()
     n_recent = VOLUME_SCAN_RECENT_DAYS
     n_base = VOLUME_SCAN_BASELINE_DAYS
@@ -332,19 +334,24 @@ def scan_volume_surge():
             if not peak.get("volume"):
                 continue
             volume_ratio = peak["volume"] / base_avg
-            price_start = history[-n_recent - 1]["close"]
             price_now = history[-1]["close"]
-            change_pct = (price_now - price_start) / price_start * 100 if price_start else None
+            price_5d = history[-n_recent - 1]["close"]
+            price_1m = history[-VOLUME_SCAN_BASELINE_DAYS - 1]["close"]
+            change_5d = (price_now - price_5d) / price_5d * 100 if price_5d else None
+            change_1m = (price_now - price_1m) / price_1m * 100 if price_1m else None
             if (
                 volume_ratio >= VOLUME_SCAN_RATIO_THRESHOLD
-                and change_pct is not None
-                and change_pct <= VOLUME_SCAN_MAX_PRICE_CHANGE_PCT
+                and change_5d is not None
+                and abs(change_5d) <= VOLUME_SCAN_PRICE_BAND_PCT
+                and change_1m is not None
+                and change_1m <= VOLUME_SCAN_MAX_MONTH_RISE_PCT
             ):
                 matches.append(
                     {
                         "ticker": ticker,
                         "close_price": price_now,
-                        "change_pct_5d": round(change_pct, 2),
+                        "change_pct_5d": round(change_5d, 2),
+                        "change_pct_1m": round(change_1m, 2),
                         "volume_ratio": round(volume_ratio, 2),
                         "spike_date": peak["date"],
                         "peak_volume": round(peak["volume"], 0),

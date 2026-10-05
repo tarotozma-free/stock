@@ -198,15 +198,17 @@ create table if not exists weekly_review_items (
   result text                  -- 'hit' / 'miss' / 'watching'
 );
 
--- "거래량 급증" 탭: 나스닥100 중 최근 5거래일 안에 하루 거래량이 직전 한 달 일평균의 3배 이상 터졌는데
--- 같은 5일간 주가 상승폭은 3% 이하인 종목. 매주 1회(토요일 복기와 같은 주기)만 갱신.
+-- "거래량 급증" 탭("거래량은 터지는데 가격은 아직 급등 전"인 매집 구간 후보): 나스닥100 중 최근 5거래일 안에
+-- 하루 거래량이 직전 한 달 일평균의 3배 이상 터졌고, 그 5일간 주가 ±3% 이내, 최근 1개월 상승폭 3% 이하인 종목.
+-- 매주 1회(토요일 복기와 같은 주기)만 갱신.
 create table if not exists volume_surge_picks (
   id bigint generated always as identity primary key,
   scan_date date not null,
   ticker text not null,
   display_name text,
   close_price numeric,
-  change_pct_5d numeric,    -- 급증 구간(최근 5거래일) 주가 변동률. 음수면 하락 동반
+  change_pct_5d numeric,    -- 급증 구간(최근 5거래일) 주가 변동률 (±3% 이내만 포함)
+  change_pct_1m numeric,    -- 최근 1개월(21거래일) 주가 변동률 (3% 이하만 포함)
   volume_ratio numeric,     -- 급증일 거래량 ÷ 직전 한 달 일평균
   spike_date date,          -- 거래량이 가장 크게 터진 날
   peak_volume numeric,
@@ -219,7 +221,6 @@ alter table volume_surge_picks add column if not exists change_pct_5d numeric;
 alter table volume_surge_picks add column if not exists spike_date date;
 alter table volume_surge_picks add column if not exists peak_volume numeric;
 alter table volume_surge_picks add column if not exists baseline_volume numeric;
-alter table volume_surge_picks drop column if exists change_pct_1m;
 alter table volume_surge_picks drop column if exists avg_volume_recent;
 alter table volume_surge_picks drop column if exists avg_volume_prior;
 
