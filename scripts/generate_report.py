@@ -307,6 +307,8 @@ VOLUME_SCAN_PRICE_BAND_PCT = 3.0  # 급증 구간(5일) 주가 변동이 ±이 �
 VOLUME_SCAN_MAX_MONTH_RISE_PCT = 3.0  # 최근 1개월(21거래일) 주가 상승이 이 값 이하여야 함(아직 급등 전)
 VOLUME_SCAN_MIN_MARKET_CAP = 1_000_000_000  # 시총 10억 달러 이상만 (초소형주는 거래량이 의미 없이 튐)
 VOLUME_SCAN_MIN_PRICE = 5.0  # 주가 5달러 이상만
+VOLUME_SCAN_MIN_BASELINE_DOLLAR_VOL = 3_000_000  # 평소 일평균 거래대금(달러)이 이보다 작으면 거래가 너무 얇아 "급증"이 의미 없음
+VOLUME_SCAN_MIN_MONTH_CHANGE_PCT = -10.0  # 최근 1개월 낙폭이 이보다 크면 매집이 아니라 하락 추세로 보고 제외
 VOLUME_SCAN_EXCLUDE_NAME_WORDS = (  # 보통주가 아닌 증권(우선주/채권/워런트 등)은 거래가 얇아 거래량 배율이 무의미하게 튄다
     "preferred", "notes", "note due", "debenture", "subordinated", "cumulative", "depositary shares", "warrant",
     "rights", " units", "fixed-rate", "fixed rate", "fixed-to-floating", "senior notes", "% ",
@@ -382,6 +384,8 @@ def _volume_surge_check(ticker):
         if not peak.get("volume"):
             return None
         volume_ratio = peak["volume"] / base_avg
+        if base_avg * history[-1]["close"] < VOLUME_SCAN_MIN_BASELINE_DOLLAR_VOL:
+            return None
         price_now = history[-1]["close"]
         price_5d = history[-n_recent - 1]["close"]
         price_1m = history[-n_base - 1]["close"]
@@ -392,7 +396,7 @@ def _volume_surge_check(ticker):
             and change_5d is not None
             and abs(change_5d) <= VOLUME_SCAN_PRICE_BAND_PCT
             and change_1m is not None
-            and change_1m <= VOLUME_SCAN_MAX_MONTH_RISE_PCT
+            and VOLUME_SCAN_MIN_MONTH_CHANGE_PCT <= change_1m <= VOLUME_SCAN_MAX_MONTH_RISE_PCT
         ):
             return {
                 "ticker": ticker,
@@ -412,7 +416,8 @@ def _volume_surge_check(ticker):
 def scan_volume_surge():
     """"거래량은 터지는데 가격은 아직 급등 전"인 매집 구간 후보를 찾는다. 나스닥 상장 종목 중(시총 10억 달러 이상,
     주가 5달러 이상) 최근 5거래일 안에 하루 거래량이 직전 한 달 일평균의 3배 이상으로 터졌고, 그 5일간 주가가
-    ±3% 이내(횡보)이며, 최근 한 달 상승폭도 3% 이하인 종목. 급락을 동반한 거래량 폭증(투매)과 이미 오른 종목은 제외한다.
+    ±3% 이내(횡보)이며, 최근 한 달 변동이 -10%~+3%인 종목(큰 낙폭은 하락 추세로 보고 제외).
+    평소 일평균 거래대금이 300만 달러 미만인 거래 얇은 종목도 제외한다. 급락을 동반한 거래량 폭증(투매)과 이미 오른 종목은 제외한다.
     5일 *평균*이 3배가 되려면 인수합병급 이벤트가 아니면 사실상 불가능해서 "하루 최대치"로 급증을 잡는다.
     주 1회(토요일 복기 스냅샷과 같은 주기)만 돌고, 모든 종목에 동일한 계산식을 적용한다(수동 입력 없음).
     1,100개 안팎을 순서대로 조회하면 오래 걸려서 소수의 스레드로 동시에 조회한다."""
