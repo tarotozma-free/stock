@@ -15,6 +15,8 @@ create table if not exists watchlist (
 );
 
 alter table watchlist add column if not exists thesis text;
+-- 관심종목 분류 (우량주(방어) / 우량주(기술) / 적자주 / 신규). 리포트의 관심종목 탭이 이 값으로 묶어서 보여준다.
+alter table watchlist add column if not exists category text;
 
 -- 예전 버전에서 쓰던 수동 입력 필드(적정PER/매수목표가)는 더 이상 사용하지 않음 — 있다면 제거.
 alter table watchlist drop column if exists fair_pe;
@@ -45,6 +47,7 @@ create table if not exists report_items (
   report_id bigint not null references daily_reports(id) on delete cascade,
   ticker text not null,
   display_name text,   -- 당시 watchlist.display_name 스냅샷 (종목명 표시용)
+  category text,       -- 당시 watchlist.category 스냅샷 (관심종목 탭 그룹핑용)
   close_price numeric,
   prev_close numeric,
   change_pct numeric,
@@ -87,6 +90,7 @@ create table if not exists report_items (
 
 -- 기존에 이미 테이블을 만든 경우를 위한 안전장치 (컬럼 추가/정리)
 alter table report_items add column if not exists display_name text;
+alter table report_items add column if not exists category text;
 alter table report_items add column if not exists pe_ratio numeric;
 alter table report_items add column if not exists peg_ratio numeric;
 alter table report_items add column if not exists sma20 numeric;

@@ -65,7 +65,7 @@ def sb_post(path, body, prefer="return=representation"):
 def get_watchlist():
     return sb_get(
         "watchlist",
-        params={"active": "eq.true", "select": "ticker,display_name,thesis"},
+        params={"active": "eq.true", "select": "ticker,display_name,thesis,category"},
     )
 
 
@@ -86,6 +86,7 @@ def merge_watchlist_and_holdings(watchlist, holdings):
                 "ticker": ticker,
                 "display_name": None,
                 "thesis": None,
+                "category": None,
                 "quantity": h.get("quantity"),
                 "avg_buy_price": h.get("avg_buy_price"),
             }
@@ -976,6 +977,22 @@ def main():
         except Exception:
             high_52w = low_52w = pe_ratio = peg_ratio = None
 
+        # Finnhub가 못 다루는 종목(예: 비트코인 BTC-USD)은 Yahoo 데이터로 시세/52주 범위를 대체한다.
+        # PER/PEG는 구할 수 없어 점수 계산에서 중립 처리된다.
+        if not q.get("c") or (high_52w is None and low_52w is None):
+            y_meta, y_hist = get_yahoo_chart(ticker)
+            if not q.get("c") and y_meta.get("regularMarketPrice") and len(y_hist) >= 2:
+                q = {
+                    "c": y_meta["regularMarketPrice"],
+                    "pc": y_hist[-2]["close"],
+                    "h": y_meta.get("regularMarketDayHigh"),
+                    "l": y_meta.get("regularMarketDayLow"),
+                }
+                notes = [n for n in notes if not n.startswith("시세 조회 실패")]
+            if high_52w is None and low_52w is None:
+                high_52w = y_meta.get("fiftyTwoWeekHigh")
+                low_52w = y_meta.get("fiftyTwoWeekLow")
+
         try:
             analyst_rating, target_avg, target_high, target_low = get_analyst_data(ticker)
         except Exception:
@@ -1050,6 +1067,7 @@ def main():
             {
                 "ticker": ticker,
                 "display_name": row.get("display_name"),
+                "category": row.get("category"),
                 "close_price": close_price,
                 "prev_close": prev_close,
                 "change_pct": change_pct,

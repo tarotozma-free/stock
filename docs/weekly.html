@@ -380,6 +380,7 @@
     const chartContainer = document.getElementById("chartContainer");
     function resolveTvSymbol(ticker) {
       if (ticker === "^TNX") return "TVC:US10Y";
+      if (ticker === "BTC-USD") return "COINBASE:BTCUSD";
       if (ticker.endsWith(".KS")) return `KRX:${ticker.slice(0, -3)}`;
       return ticker;
     }
