@@ -299,36 +299,40 @@ def scan_kr_top_picks(exclude_tickers, report_date, limit=TOP_PICKS_COUNT):
     return candidates[:limit]
 
 
-VOLUME_SCAN_WINDOW_DAYS = 21  # 약 1개월치 거래일수
-VOLUME_SCAN_RATIO_THRESHOLD = 3.0  # 최근 1개월 평균거래량이 그 이전 대비 몇 배 이상이어야 하는지
-VOLUME_SCAN_MAX_PRICE_CHANGE_PCT = 3.0  # 같은 기간 주가 변동폭이 이 값 이하여야 함(조용한 매집 패턴)
+VOLUME_SCAN_RECENT_DAYS = 5  # 급증 여부를 보는 최근 구간(거래일)
+VOLUME_SCAN_BASELINE_DAYS = 21  # 평소 거래량 기준선: 최근 구간 바로 앞 약 1개월(거래일)
+VOLUME_SCAN_RATIO_THRESHOLD = 3.0  # 최근 구간 중 하루 최대 거래량이 평소 일평균의 몇 배 이상이어야 하는지
+VOLUME_SCAN_MAX_PRICE_CHANGE_PCT = 3.0  # 같은 구간 주가 상승폭이 이 값 이하여야 함(이미 급등한 종목 제외)
 
 
 def scan_volume_surge():
-    """나스닥100 종목 중 최근 1개월 평균 거래량이 그 이전 1개월 대비 3배 이상 늘었는데
-    주가는 3% 이하로만 움직인(조용히 매집되는 듯한) 종목을 찾는다. 매일이 아니라 주 1회만 실행해도
-    충분한 스크리너라 토요일 복기 스냅샷과 같은 주기로 돈다. 매수/매도 근접도 점수와는 별개의
-    지표이며, 모든 종목에 동일한 계산식을 적용한다(수동 입력 없음)."""
+    """나스닥100 종목 중 최근 5거래일 안에 하루 거래량이 직전 한 달 일평균의 3배 이상으로 터졌는데,
+    같은 5일간 주가 상승폭은 3% 이하인(아직 안 오른) 종목을 찾는다.
+    5일 *평균*이 3배가 되려면 인수합병급 이벤트가 아니면 사실상 불가능해서(대형주 기준 실측: 2배 이상도 0개)
+    "하루 최대치"로 급증을 잡는다. 하락 종목도 상승폭 조건엔 걸리므로 화면에서 5일 변동률로 횡보/하락을 구분한다.
+    주 1회(토요일 복기 스냅샷과 같은 주기)만 돌고, 모든 종목에 동일한 계산식을 적용한다(수동 입력 없음)."""
     universe = get_nasdaq100_tickers()
-    w = VOLUME_SCAN_WINDOW_DAYS
+    n_recent = VOLUME_SCAN_RECENT_DAYS
+    n_base = VOLUME_SCAN_BASELINE_DAYS
     matches = []
     for ticker in universe:
         try:
             _, history = get_yahoo_chart(ticker)
-            if len(history) < w * 2 + 1:
+            if len(history) < n_recent + n_base + 1:
                 continue
-            recent = history[-w:]
-            prior = history[-2 * w : -w]
-            vol_recent = [p["volume"] for p in recent if p.get("volume")]
-            vol_prior = [p["volume"] for p in prior if p.get("volume")]
-            if not vol_recent or not vol_prior:
+            recent = history[-n_recent:]
+            base = history[-(n_recent + n_base) : -n_recent]
+            base_vols = [p["volume"] for p in base if p.get("volume")]
+            if not base_vols:
                 continue
-            avg_recent = sum(vol_recent) / len(vol_recent)
-            avg_prior = sum(vol_prior) / len(vol_prior)
-            if not avg_prior:
+            base_avg = sum(base_vols) / len(base_vols)
+            if not base_avg:
                 continue
-            volume_ratio = avg_recent / avg_prior
-            price_start = history[-w - 1]["close"]
+            peak = max(recent, key=lambda p: p.get("volume") or 0)
+            if not peak.get("volume"):
+                continue
+            volume_ratio = peak["volume"] / base_avg
+            price_start = history[-n_recent - 1]["close"]
             price_now = history[-1]["close"]
             change_pct = (price_now - price_start) / price_start * 100 if price_start else None
             if (
@@ -340,10 +344,11 @@ def scan_volume_surge():
                     {
                         "ticker": ticker,
                         "close_price": price_now,
-                        "change_pct_1m": round(change_pct, 2),
+                        "change_pct_5d": round(change_pct, 2),
                         "volume_ratio": round(volume_ratio, 2),
-                        "avg_volume_recent": round(avg_recent, 0),
-                        "avg_volume_prior": round(avg_prior, 0),
+                        "spike_date": peak["date"],
+                        "peak_volume": round(peak["volume"], 0),
+                        "baseline_volume": round(base_avg, 0),
                     }
                 )
         except Exception:

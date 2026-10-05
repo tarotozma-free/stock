@@ -123,11 +123,13 @@
   </div>
 
   <div id="tab-volume" class="tab-panel">
-    <h2 style="margin-top:24px;">거래량 급증 — 조용한 매집 신호</h2>
+    <h2 style="margin-top:24px;">거래량 급증 포착</h2>
     <p style="color:#888; font-size:0.85em;">
-      나스닥100 종목 중 최근 1개월 평균 거래량이 그 이전 1개월 대비 3배 이상 늘었는데 주가는
-      3% 이하로만 움직인 종목입니다. 매일이 아니라 주 1회(토요일 복기와 같은 주기)만 갱신됩니다.
-      투자 조언이 아닌 기계적 스크리닝 결과입니다.
+      나스닥100 종목 중 최근 5거래일 안에 하루 거래량이 직전 한 달 일평균의 3배 이상 터졌는데,
+      같은 5일간 주가 상승폭은 3% 이하인 종목입니다. 하락한 종목도 조건에 걸리므로
+      <b>횡보</b>(±3% 이내)와 <b>하락 동반</b>(-3% 초과 하락, 투매일 수 있음)을 구분해서 표시합니다.
+      대형주는 3배 급증 자체가 드물어 대부분의 주엔 비어 있는 게 정상입니다.
+      매일이 아니라 주 1회(토요일 복기와 같은 주기)만 갱신되며, 투자 조언이 아닌 기계적 스크리닝 결과입니다.
     </p>
     <p id="volumeScanNote" class="sub" style="margin-top:-8px;"></p>
     <div id="volumeSurge"></div>
@@ -466,17 +468,24 @@
           }
           const table = document.createElement("table");
           table.innerHTML = `
-            <thead><tr><th>종목</th><th>현재가</th><th>1개월 변동률</th><th>거래량 배율</th></tr></thead>
+            <thead><tr><th>종목</th><th>현재가</th><th>급증일</th><th>거래량 배율</th><th>5일 변동률</th><th>구분</th></tr></thead>
             <tbody>
               ${latestRows
                 .map((r) => {
-                  const cls = r.change_pct_1m >= 0 ? "up" : "down";
-                  const sign = r.change_pct_1m >= 0 ? "+" : "";
+                  const chg = r.change_pct_5d;
+                  const cls = chg >= 0 ? "up" : "down";
+                  const sign = chg >= 0 ? "+" : "";
+                  const falling = chg < -3;
+                  const kind = falling
+                    ? '<span class="badge" style="background:rgba(21,101,192,0.15); color:#1565c0;">하락 동반</span>'
+                    : '<span class="badge badge-watch">횡보</span>';
                   return `<tr>
                     <td>${tickerLabel(r)}</td>
                     <td>${r.close_price ?? "-"}</td>
-                    <td class="${cls}">${sign}${r.change_pct_1m.toFixed(2)}%</td>
+                    <td>${r.spike_date ?? "-"}</td>
                     <td>${r.volume_ratio.toFixed(2)}x</td>
+                    <td class="${cls}">${sign}${chg.toFixed(2)}%</td>
+                    <td>${kind}</td>
                   </tr>`;
                 })
                 .join("")}
