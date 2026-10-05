@@ -276,3 +276,7 @@ create policy "authenticated manage holdings" on holdings
 insert into watchlist (ticker, display_name)
 values ('CAT', 'Caterpillar'), ('NVDA', 'NVIDIA'), ('PLTR', 'Palantir')
 on conflict (ticker) do nothing;
+
+-- 거래량 급증 종목에 붙는 최근 2주 이벤트성 뉴스(실적/임상/인수합병/지분공시/등급변경 등)
+alter table volume_surge_picks add column if not exists news jsonb;
+notify pgrst, 'reload schema';

@@ -438,6 +438,8 @@ def scan_volume_surge():
     matches = matches[:VOLUME_SCAN_MAX_RESULTS]
     for m in matches:
         m["display_name"] = names.get(m["ticker"]) or None
+        # 최근 2주 안의 이벤트성 뉴스(실적/임상/인수합병/지분공시/등급변경 등)만 붙인다. 없으면 비워 둔다.
+        m["news"] = get_company_news(m["ticker"], m["display_name"], days=14, limit=3, event_only=True) or None
     print(
         f"거래량 스캔: 대상 {len(tickers)}개, 조회 실패 {failed}개, 조건 충족 {total_matches}개"
         f"(저장 {len(matches)}개)"
@@ -554,7 +556,15 @@ def translate_to_ko(text):
         return text
 
 
-def get_company_news(ticker, display_name=None, days=3, limit=3):
+NEWS_EVENT_WORDS = (  # "특별 뉴스" 판별용: 헤드라인에 이런 단어가 있으면 주가/수급에 영향을 줄 만한 이벤트로 본다
+    "announce", "results", "trial", "phase", "fda", "approv", "acquir", "acquisition", "merger", "buyout", "takeover",
+    "offering", "buyback", "repurchase", "dividend", "guidance", "earnings", "upgrade", "downgrade", "price target",
+    "shareholder", "stake", "activist", "13d", "lawsuit", "investigation", "contract", "partnership", "agreement",
+    "ceo", "appoint", "resign", "bankruptcy", "recall", "spin-off", "split", "delist",
+)
+
+
+def get_company_news(ticker, display_name=None, days=3, limit=3, event_only=False):
     """등락률이 큰(이벤트가 있었던) 종목에 대해 최근 뉴스 헤드라인을 가져와 한국어로 번역한다.
     적정가 판단에 참고할 수 있도록 헤드라인/출처/링크만 간단히 담는다."""
     try:
@@ -563,6 +573,8 @@ def get_company_news(ticker, display_name=None, days=3, limit=3):
         articles = _finnhub_get("company-news", {"symbol": ticker, "from": str(frm), "to": str(today)}).json() or []
         articles.sort(key=lambda a: a.get("datetime", 0), reverse=True)
         articles = [a for a in articles if a.get("headline") and _is_relevant_headline(a["headline"], ticker, display_name)]
+        if event_only:
+            articles = [a for a in articles if any(w in a["headline"].lower() for w in NEWS_EVENT_WORDS)]
         return [
             {
                 "headline": a.get("headline"),
