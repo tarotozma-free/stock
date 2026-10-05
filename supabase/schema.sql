@@ -198,8 +198,8 @@ create table if not exists weekly_review_items (
   result text                  -- 'hit' / 'miss' / 'watching'
 );
 
--- "거래량 급증" 탭("거래량은 터지는데 가격은 아직 급등 전"인 매집 구간 후보): 나스닥100 중 최근 5거래일 안에
--- 하루 거래량이 직전 한 달 일평균의 2배 이상 터졌고, 그 5일간 주가 ±3% 이내, 최근 1개월 상승폭 3% 이하인 종목.
+-- "거래량 급증" 탭("거래량은 터지는데 가격은 아직 급등 전"인 매집 구간 후보): 나스닥 상장 종목(시총 10억 달러 이상,
+-- 주가 5달러 이상) 중 최근 5거래일 안에 하루 거래량이 직전 한 달 일평균의 3배 이상 터졌고, 그 5일간 주가 ±3% 이내, 최근 1개월 상승폭 3% 이하인 종목.
 -- 매주 1회(토요일 복기와 같은 주기)만 갱신.
 create table if not exists volume_surge_picks (
   id bigint generated always as identity primary key,

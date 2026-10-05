@@ -22,6 +22,7 @@ import re
 import smtplib
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from zoneinfo import ZoneInfo
@@ -301,73 +302,141 @@ def scan_kr_top_picks(exclude_tickers, report_date, limit=TOP_PICKS_COUNT):
 
 VOLUME_SCAN_RECENT_DAYS = 5  # 급증 여부를 보는 최근 구간(거래일)
 VOLUME_SCAN_BASELINE_DAYS = 21  # 평소 거래량 기준선: 최근 구간 바로 앞 약 1개월(거래일)
-VOLUME_SCAN_RATIO_THRESHOLD = 2.0  # 최근 구간 중 하루 최대 거래량이 평소 일평균의 몇 배 이상이어야 하는지
+VOLUME_SCAN_RATIO_THRESHOLD = 3.0  # 최근 구간 중 하루 최대 거래량이 평소 일평균의 몇 배 이상이어야 하는지
 VOLUME_SCAN_PRICE_BAND_PCT = 3.0  # 급증 구간(5일) 주가 변동이 ±이 값 이내여야 함(투매 급락/이미 급등 중인 종목 제외)
 VOLUME_SCAN_MAX_MONTH_RISE_PCT = 3.0  # 최근 1개월(21거래일) 주가 상승이 이 값 이하여야 함(아직 급등 전)
+VOLUME_SCAN_MIN_MARKET_CAP = 1_000_000_000  # 시총 10억 달러 이상만 (초소형주는 거래량이 의미 없이 튐)
+VOLUME_SCAN_MIN_PRICE = 5.0  # 주가 5달러 이상만
+VOLUME_SCAN_EXCLUDE_NAME_WORDS = (  # 보통주가 아닌 증권(우선주/채권/워런트 등)은 거래가 얇아 거래량 배율이 무의미하게 튄다
+    "preferred", "notes", "note due", "debenture", "subordinated", "cumulative", "depositary shares", "warrant",
+    "rights", " units", "fixed-rate", "fixed rate", "fixed-to-floating", "senior notes", "% ",
+)
+VOLUME_SCAN_WORKERS = 6  # 야후 동시 조회 수 (너무 높이면 차단될 수 있음)
+VOLUME_SCAN_MAX_RESULTS = 50  # 결과가 너무 많을 때 거래량 배율 상위 N개만 저장
+
+
+def _clean_security_name(name):
+    """'Exelon Corporation Common Stock' 같은 스크리너 종목명에서 증권 종류 꼬리표를 뗀다."""
+    for marker in (
+        " Common Stock", " Ordinary Share", " American Depositary", " Class A", " Class B", " Class C",
+        " Common Shares", " Depositary Shares",
+    ):
+        idx = name.find(marker)
+        if idx > 0:
+            name = name[:idx]
+    return name.strip()
+
+
+def get_nasdaq_universe():
+    """나스닥 공식 스크리너 API(키 불필요)에서 나스닥 상장 종목 전체를 가져와 시총/주가 필터로 거른다.
+    반환: [(야후 티커, 영문 종목명)]. 실패하면 나스닥100 목록으로 대체한다(이름 없음)."""
+    try:
+        r = requests.get(
+            "https://api.nasdaq.com/api/screener/stocks",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            params={"tableonly": "true", "limit": 10000, "exchange": "nasdaq", "download": "true"},
+            timeout=60,
+        )
+        r.raise_for_status()
+        out = []
+        for row in r.json()["data"]["rows"]:
+            try:
+                cap = float(str(row.get("marketCap") or "0").replace(",", ""))
+                price = float(str(row.get("lastsale") or "0").replace("$", "").replace(",", ""))
+            except ValueError:
+                continue
+            if cap < VOLUME_SCAN_MIN_MARKET_CAP or price < VOLUME_SCAN_MIN_PRICE:
+                continue
+            raw_name = (row.get("name") or "").lower()
+            if any(w in raw_name for w in VOLUME_SCAN_EXCLUDE_NAME_WORDS):
+                continue
+            symbol = row["symbol"].strip().replace("/", "-").replace(".", "-")  # 야후 표기(BRK-B 형태)로 변환
+            out.append((symbol, _clean_security_name(row.get("name") or "")))
+        return out or [(t, None) for t in get_nasdaq100_tickers()]
+    except Exception:
+        return [(t, None) for t in get_nasdaq100_tickers()]
+
+
+def _volume_surge_check(ticker):
+    """한 종목을 검사해서 조건에 맞으면 결과 dict, 아니면 None, 데이터를 못 가져오면 "failed"를 반환한다."""
+    try:
+        n_recent = VOLUME_SCAN_RECENT_DAYS
+        n_base = VOLUME_SCAN_BASELINE_DAYS
+        _, history = get_yahoo_chart(ticker)
+        if not history:
+            time.sleep(1.0)  # 일시적 오류/제한일 수 있어 한 번만 재시도
+            _, history = get_yahoo_chart(ticker)
+        if not history:
+            return "failed"
+        if len(history) < n_recent + n_base + 1:
+            return None  # 상장한 지 얼마 안 돼 기준선을 못 만드는 종목
+        recent = history[-n_recent:]
+        base = history[-(n_recent + n_base) : -n_recent]
+        base_vols = [p["volume"] for p in base if p.get("volume")]
+        if not base_vols:
+            return None
+        base_avg = sum(base_vols) / len(base_vols)
+        if not base_avg:
+            return None
+        peak = max(recent, key=lambda p: p.get("volume") or 0)
+        if not peak.get("volume"):
+            return None
+        volume_ratio = peak["volume"] / base_avg
+        price_now = history[-1]["close"]
+        price_5d = history[-n_recent - 1]["close"]
+        price_1m = history[-n_base - 1]["close"]
+        change_5d = (price_now - price_5d) / price_5d * 100 if price_5d else None
+        change_1m = (price_now - price_1m) / price_1m * 100 if price_1m else None
+        if (
+            volume_ratio >= VOLUME_SCAN_RATIO_THRESHOLD
+            and change_5d is not None
+            and abs(change_5d) <= VOLUME_SCAN_PRICE_BAND_PCT
+            and change_1m is not None
+            and change_1m <= VOLUME_SCAN_MAX_MONTH_RISE_PCT
+        ):
+            return {
+                "ticker": ticker,
+                "close_price": price_now,
+                "change_pct_5d": round(change_5d, 2),
+                "change_pct_1m": round(change_1m, 2),
+                "volume_ratio": round(volume_ratio, 2),
+                "spike_date": peak["date"],
+                "peak_volume": round(peak["volume"], 0),
+                "baseline_volume": round(base_avg, 0),
+            }
+        return None
+    except Exception:
+        return "failed"
 
 
 def scan_volume_surge():
-    """"거래량은 터지는데 가격은 아직 급등 전"인 매집 구간 후보를 찾는다. 나스닥100 중 최근 5거래일 안에
-    하루 거래량이 직전 한 달 일평균의 2배 이상으로 터졌고, 그 5일간 주가가 ±3% 이내(횡보)이며,
-    최근 한 달 상승폭도 3% 이하인 종목. 급락을 동반한 거래량 폭증(투매)과 이미 오른 종목은 제외한다.
-    5일 *평균*이 2~3배가 되려면 인수합병급 이벤트가 아니면 사실상 불가능해서(대형주 실측: 평균 기준 2배 이상 0개)
-    "하루 최대치"로 급증을 잡는다. 주 1회(토요일 복기 스냅샷과 같은 주기)만 돌고,
-    모든 종목에 동일한 계산식을 적용한다(수동 입력 없음)."""
-    universe = get_nasdaq100_tickers()
-    n_recent = VOLUME_SCAN_RECENT_DAYS
-    n_base = VOLUME_SCAN_BASELINE_DAYS
+    """"거래량은 터지는데 가격은 아직 급등 전"인 매집 구간 후보를 찾는다. 나스닥 상장 종목 중(시총 10억 달러 이상,
+    주가 5달러 이상) 최근 5거래일 안에 하루 거래량이 직전 한 달 일평균의 3배 이상으로 터졌고, 그 5일간 주가가
+    ±3% 이내(횡보)이며, 최근 한 달 상승폭도 3% 이하인 종목. 급락을 동반한 거래량 폭증(투매)과 이미 오른 종목은 제외한다.
+    5일 *평균*이 3배가 되려면 인수합병급 이벤트가 아니면 사실상 불가능해서 "하루 최대치"로 급증을 잡는다.
+    주 1회(토요일 복기 스냅샷과 같은 주기)만 돌고, 모든 종목에 동일한 계산식을 적용한다(수동 입력 없음).
+    1,100개 안팎을 순서대로 조회하면 오래 걸려서 소수의 스레드로 동시에 조회한다."""
+    universe = get_nasdaq_universe()
+    names = dict(universe)
+    tickers = [t for t, _ in universe]
     matches = []
-    for ticker in universe:
-        try:
-            _, history = get_yahoo_chart(ticker)
-            if len(history) < n_recent + n_base + 1:
-                continue
-            recent = history[-n_recent:]
-            base = history[-(n_recent + n_base) : -n_recent]
-            base_vols = [p["volume"] for p in base if p.get("volume")]
-            if not base_vols:
-                continue
-            base_avg = sum(base_vols) / len(base_vols)
-            if not base_avg:
-                continue
-            peak = max(recent, key=lambda p: p.get("volume") or 0)
-            if not peak.get("volume"):
-                continue
-            volume_ratio = peak["volume"] / base_avg
-            price_now = history[-1]["close"]
-            price_5d = history[-n_recent - 1]["close"]
-            price_1m = history[-VOLUME_SCAN_BASELINE_DAYS - 1]["close"]
-            change_5d = (price_now - price_5d) / price_5d * 100 if price_5d else None
-            change_1m = (price_now - price_1m) / price_1m * 100 if price_1m else None
-            if (
-                volume_ratio >= VOLUME_SCAN_RATIO_THRESHOLD
-                and change_5d is not None
-                and abs(change_5d) <= VOLUME_SCAN_PRICE_BAND_PCT
-                and change_1m is not None
-                and change_1m <= VOLUME_SCAN_MAX_MONTH_RISE_PCT
-            ):
-                matches.append(
-                    {
-                        "ticker": ticker,
-                        "close_price": price_now,
-                        "change_pct_5d": round(change_5d, 2),
-                        "change_pct_1m": round(change_1m, 2),
-                        "volume_ratio": round(volume_ratio, 2),
-                        "spike_date": peak["date"],
-                        "peak_volume": round(peak["volume"], 0),
-                        "baseline_volume": round(base_avg, 0),
-                    }
-                )
-        except Exception:
-            continue
+    failed = 0
+    with ThreadPoolExecutor(max_workers=VOLUME_SCAN_WORKERS) as pool:
+        for result in pool.map(_volume_surge_check, tickers):
+            if result == "failed":
+                failed += 1
+            elif result:
+                matches.append(result)
 
     matches.sort(key=lambda m: m["volume_ratio"], reverse=True)
+    total_matches = len(matches)
+    matches = matches[:VOLUME_SCAN_MAX_RESULTS]
     for m in matches:
-        try:
-            name_en = _finnhub_get("stock/profile2", {"symbol": m["ticker"]}).json().get("name")
-            m["display_name"] = translate_to_ko(name_en) if name_en else None
-        except Exception:
-            m["display_name"] = None
+        m["display_name"] = names.get(m["ticker"]) or None
+    print(
+        f"거래량 스캔: 대상 {len(tickers)}개, 조회 실패 {failed}개, 조건 충족 {total_matches}개"
+        f"(저장 {len(matches)}개)"
+    )
     return matches
 
 
